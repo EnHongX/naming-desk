@@ -1,12 +1,14 @@
 import { useState, useCallback, useEffect } from 'react'
-import { NamingType, generateName, namingTypeLabels } from './utils/naming'
+import { NamingType, namingTypeLabels } from './utils/naming'
 import { 
   saveHistory, 
   getHistory, 
   toggleFavorite, 
   deleteHistory,
+  generateNamingBatch,
   HistoryItem,
-  NamingResults
+  NamingResults,
+  GenerateResult
 } from './services/api'
 import './App.css'
 
@@ -40,6 +42,7 @@ function App() {
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([])
   const [searchKeyword, setSearchKeyword] = useState('')
   const [loading, setLoading] = useState(false)
+  const [generating, setGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const loadHistory = useCallback(async (mode: 'all' | 'favorites' = 'all', keyword?: string) => {
@@ -69,45 +72,29 @@ function App() {
     }
   }, [viewMode, loadHistory, searchKeyword])
 
-  const generateAllTypes = useCallback((text: string): NamingResult[] => {
+  const convertResultsToNamingResult = (results: NamingResults): NamingResult[] => {
     return [
       {
         type: NamingType.GITHUB_REPO,
         label: namingTypeLabels[NamingType.GITHUB_REPO],
-        value: generateName(text, NamingType.GITHUB_REPO),
+        value: results.githubRepo,
       },
       {
         type: NamingType.CAMEL_CASE,
         label: namingTypeLabels[NamingType.CAMEL_CASE],
-        value: generateName(text, NamingType.CAMEL_CASE),
+        value: results.camelCase,
       },
       {
         type: NamingType.SNAKE_CASE,
         label: namingTypeLabels[NamingType.SNAKE_CASE],
-        value: generateName(text, NamingType.SNAKE_CASE),
+        value: results.snakeCase,
       },
       {
         type: NamingType.GIT_BRANCH,
         label: namingTypeLabels[NamingType.GIT_BRANCH],
-        value: generateName(text, NamingType.GIT_BRANCH),
+        value: results.gitBranch,
       },
     ]
-  }, [])
-
-  const extractResults = (namingResults: NamingResult[]): NamingResults => {
-    const result: NamingResults = {
-      githubRepo: '',
-      camelCase: '',
-      snakeCase: '',
-      gitBranch: '',
-    }
-    for (const r of namingResults) {
-      if (r.type === NamingType.GITHUB_REPO) result.githubRepo = r.value
-      if (r.type === NamingType.CAMEL_CASE) result.camelCase = r.value
-      if (r.type === NamingType.SNAKE_CASE) result.snakeCase = r.value
-      if (r.type === NamingType.GIT_BRANCH) result.gitBranch = r.value
-    }
-    return result
   }
 
   const handleGenerate = useCallback(async () => {
@@ -118,36 +105,58 @@ function App() {
       return
     }
 
-    const newResults: BatchItemResult[] = []
-    
-    for (let index = 0; index < lines.length; index++) {
-      const line = lines[index].trim()
-      const results = generateAllTypes(line)
-      const itemId = `item-${index}-${Date.now()}`
+    try {
+      setGenerating(true)
+      setError(null)
       
-      try {
-        const extracted = extractResults(results)
-        const saveResult = await saveHistory(line, extracted)
-        newResults.push({
-          id: itemId,
-          dbId: saveResult.id,
-          originalInput: line,
-          results,
-          isFavorite: false,
-        })
-      } catch (err) {
-        console.error('Failed to save history:', err)
-        newResults.push({
-          id: itemId,
-          originalInput: line,
-          results,
-          isFavorite: false,
-        })
-      }
-    }
+      const generateResults = await generateNamingBatch(lines)
+      const newResults: BatchItemResult[] = []
+      
+      for (let index = 0; index < generateResults.length; index++) {
+        const result = generateResults[index]
+        const itemId = `item-${index}-${Date.now()}`
+        
+        if (result.error) {
+          console.error(`Generate failed for "${result.originalInput}":`, result.error)
+          newResults.push({
+            id: itemId,
+            originalInput: result.originalInput,
+            results: [],
+            isFavorite: false,
+          })
+          continue
+        }
 
-    setBatchResults(newResults)
-  }, [input, generateAllTypes, extractResults])
+        const namingResults = convertResultsToNamingResult(result.results)
+        
+        try {
+          const saveResult = await saveHistory(result.originalInput, result.results)
+          newResults.push({
+            id: itemId,
+            dbId: saveResult.id,
+            originalInput: result.originalInput,
+            results: namingResults,
+            isFavorite: false,
+          })
+        } catch (err) {
+          console.error('Failed to save history:', err)
+          newResults.push({
+            id: itemId,
+            originalInput: result.originalInput,
+            results: namingResults,
+            isFavorite: false,
+          })
+        }
+      }
+
+      setBatchResults(newResults)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '生成命名失败')
+      console.error('Generate naming error:', err)
+    } finally {
+      setGenerating(false)
+    }
+  }, [input])
 
   const handleCopy = useCallback(async (text: string, itemId: string, type: NamingType | 'all') => {
     try {
@@ -291,10 +300,16 @@ function App() {
               <div className="input-hint">
                 <span>提示：每行输入一条，按 Ctrl + Enter 快速生成</span>
               </div>
-              <button className="generate-btn" onClick={handleGenerate} disabled={!input.trim()}>
-                批量生成命名
+              <button className="generate-btn" onClick={handleGenerate} disabled={!input.trim() || generating}>
+                {generating ? '生成中...' : '批量生成命名'}
               </button>
             </section>
+
+            {error && viewMode === 'generator' && (
+              <div className="error-message">
+                {error}
+              </div>
+            )}
 
             {batchResults.length > 0 && (
               <section className="results-section">

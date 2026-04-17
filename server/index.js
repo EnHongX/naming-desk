@@ -1,6 +1,8 @@
+import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import { initDatabase, saveNamingHistory, toggleFavorite, getHistory, deleteHistory, getHistoryById } from './database.js'
+import { generateNamingWithAI } from './qwenService.js'
 
 const app = express()
 const PORT = 3002
@@ -10,6 +12,72 @@ app.use(express.json())
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Naming Desk API is running' })
+})
+
+app.post('/api/generate', async (req, res) => {
+  try {
+    const { input } = req.body
+    
+    if (!input || !input.trim()) {
+      return res.status(400).json({ error: 'input is required' })
+    }
+
+    const results = await generateNamingWithAI(input)
+    
+    res.json({
+      success: true,
+      originalInput: input,
+      results: {
+        githubRepo: results.githubRepo || '',
+        camelCase: results.camelCase || '',
+        snakeCase: results.snakeCase || '',
+        gitBranch: results.gitBranch || ''
+      }
+    })
+  } catch (error) {
+    console.error('Error generating naming:', error)
+    res.status(500).json({ error: error.message || 'Failed to generate naming' })
+  }
+})
+
+app.post('/api/generate/batch', async (req, res) => {
+  try {
+    const { inputs } = req.body
+    
+    if (!inputs || !Array.isArray(inputs) || inputs.length === 0) {
+      return res.status(400).json({ error: 'inputs array is required' })
+    }
+
+    const results = []
+    
+    for (const input of inputs) {
+      try {
+        const namingResult = await generateNamingWithAI(input)
+        results.push({
+          originalInput: input,
+          results: {
+            githubRepo: namingResult.githubRepo || '',
+            camelCase: namingResult.camelCase || '',
+            snakeCase: namingResult.snakeCase || '',
+            gitBranch: namingResult.gitBranch || ''
+          }
+        })
+      } catch (error) {
+        results.push({
+          originalInput: input,
+          error: error.message
+        })
+      }
+    }
+    
+    res.json({
+      success: true,
+      results
+    })
+  } catch (error) {
+    console.error('Error batch generating naming:', error)
+    res.status(500).json({ error: error.message || 'Failed to batch generate naming' })
+  }
 })
 
 app.post('/api/history', async (req, res) => {
