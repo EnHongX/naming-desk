@@ -8,11 +8,21 @@ import {
   generateNamingBatch,
   HistoryItem,
   NamingResults,
-  GenerateResult
+  GenerateResult,
+  Preference,
+  GlossaryTerm,
+  getAllPreferences,
+  updatePreference,
+  getAllGlossaryTerms,
+  addGlossaryTerm,
+  updateGlossaryTerm,
+  deleteGlossaryTerm
 } from './services/api'
 import './App.css'
 
-type ViewMode = 'generator' | 'history' | 'favorites'
+type ViewMode = 'generator' | 'history' | 'favorites' | 'settings'
+
+type SettingsTab = 'preferences' | 'glossary'
 
 interface NamingResult {
   type: NamingType
@@ -45,6 +55,19 @@ function App() {
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('preferences')
+  const [preferences, setPreferences] = useState<Preference[]>([])
+  const [glossaryTerms, setGlossaryTerms] = useState<GlossaryTerm[]>([])
+  const [glossarySearchKeyword, setGlossarySearchKeyword] = useState('')
+  const [editingTerm, setEditingTerm] = useState<GlossaryTerm | null>(null)
+  const [showAddModal, setShowAddModal] = useState(false)
+  const [newTermForm, setNewTermForm] = useState({
+    chineseTerm: '',
+    englishTerm: '',
+    priority: 0,
+    description: ''
+  })
+
   const loadHistory = useCallback(async (mode: 'all' | 'favorites' = 'all', keyword?: string) => {
     try {
       setLoading(true)
@@ -66,11 +89,49 @@ function App() {
     }
   }, [])
 
+  const loadPreferences = useCallback(async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      const prefs = await getAllPreferences()
+      setPreferences(prefs)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载偏好设置失败')
+      console.error('Load preferences error:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const loadGlossaryTerms = useCallback(async (keyword?: string) => {
+    try {
+      setLoading(true)
+      setError(null)
+      const options: { keyword?: string } = {}
+      if (keyword && keyword.trim()) {
+        options.keyword = keyword.trim()
+      }
+      const terms = await getAllGlossaryTerms(options)
+      setGlossaryTerms(terms)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载术语表失败')
+      console.error('Load glossary terms error:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     if (viewMode === 'history' || viewMode === 'favorites') {
       loadHistory(viewMode === 'favorites' ? 'favorites' : 'all', searchKeyword)
+    } else if (viewMode === 'settings') {
+      if (settingsTab === 'preferences') {
+        loadPreferences()
+      } else {
+        loadGlossaryTerms(glossarySearchKeyword)
+      }
     }
-  }, [viewMode, loadHistory, searchKeyword])
+  }, [viewMode, loadHistory, searchKeyword, settingsTab, loadPreferences, loadGlossaryTerms, glossarySearchKeyword])
 
   const convertResultsToNamingResult = (results: NamingResults): NamingResult[] => {
     return [
@@ -235,6 +296,80 @@ function App() {
     setViewMode('generator')
   }, [])
 
+  const handleUpdatePreference = useCallback(async (key: string, value: string) => {
+    try {
+      const updated = await updatePreference(key, value)
+      setPreferences(prev => 
+        prev.map(pref => 
+          pref.preference_key === key ? updated : pref
+        )
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '更新偏好设置失败')
+      console.error('Update preference error:', err)
+    }
+  }, [])
+
+  const handleAddGlossaryTerm = useCallback(async () => {
+    try {
+      if (!newTermForm.chineseTerm.trim() || !newTermForm.englishTerm.trim()) {
+        setError('中文术语和英文术语都不能为空')
+        return
+      }
+
+      const newTerm = await addGlossaryTerm(newTermForm)
+      setGlossaryTerms(prev => [...prev, newTerm].sort((a, b) => b.priority - a.priority))
+      setShowAddModal(false)
+      setNewTermForm({
+        chineseTerm: '',
+        englishTerm: '',
+        priority: 0,
+        description: ''
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '添加术语失败')
+      console.error('Add glossary term error:', err)
+    }
+  }, [newTermForm])
+
+  const handleUpdateGlossaryTerm = useCallback(async () => {
+    if (!editingTerm) return
+    
+    try {
+      const updated = await updateGlossaryTerm(editingTerm.id, {
+        chineseTerm: editingTerm.chinese_term,
+        englishTerm: editingTerm.english_term,
+        priority: editingTerm.priority,
+        description: editingTerm.description
+      })
+      setGlossaryTerms(prev => 
+        prev.map(term => 
+          term.id === editingTerm.id ? updated : term
+        ).sort((a, b) => b.priority - a.priority)
+      )
+      setEditingTerm(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '更新术语失败')
+      console.error('Update glossary term error:', err)
+    }
+  }, [editingTerm])
+
+  const handleDeleteGlossaryTerm = useCallback(async (id: number) => {
+    try {
+      await deleteGlossaryTerm(id)
+      setGlossaryTerms(prev => prev.filter(term => term.id !== id))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除术语失败')
+      console.error('Delete glossary term error:', err)
+    }
+  }, [])
+
+  const handleGlossarySearch = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      loadGlossaryTerms(glossarySearchKeyword)
+    }
+  }, [loadGlossaryTerms, glossarySearchKeyword])
+
   const handleSearch = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       loadHistory(viewMode === 'favorites' ? 'favorites' : 'all', searchKeyword)
@@ -281,6 +416,12 @@ function App() {
           onClick={() => setViewMode('favorites')}
         >
           我的收藏
+        </button>
+        <button
+          className={`nav-tab ${viewMode === 'settings' ? 'active' : ''}`}
+          onClick={() => setViewMode('settings')}
+        >
+          设置
         </button>
       </nav>
 
@@ -544,6 +685,312 @@ function App() {
                   ))}
                 </div>
               </section>
+            )}
+          </>
+        )}
+
+        {viewMode === 'settings' && (
+          <>
+            <nav className="settings-nav">
+              <button
+                className={`settings-tab ${settingsTab === 'preferences' ? 'active' : ''}`}
+                onClick={() => setSettingsTab('preferences')}
+              >
+                命名偏好
+              </button>
+              <button
+                className={`settings-tab ${settingsTab === 'glossary' ? 'active' : ''}`}
+                onClick={() => setSettingsTab('glossary')}
+              >
+                术语表
+              </button>
+            </nav>
+
+            {error && (
+              <div className="error-message">
+                {error}
+              </div>
+            )}
+
+            {loading ? (
+              <div className="loading-section">
+                <p className="loading-text">加载中...</p>
+              </div>
+            ) : settingsTab === 'preferences' ? (
+              <section className="preferences-section">
+                <div className="settings-header">
+                  <h2 className="settings-title">命名偏好设置</h2>
+                  <p className="settings-description">配置 AI 命名生成的偏好选项，生成命名时会优先遵循这些设置</p>
+                </div>
+                
+                <div className="preferences-list">
+                  {preferences.map((pref) => (
+                    <div key={pref.preference_key} className="preference-item">
+                      <div className="preference-info">
+                        <label className="preference-label">{pref.preference_key}</label>
+                        <p className="preference-description">{pref.description}</p>
+                      </div>
+                      <div className="preference-control">
+                        {pref.preference_key === 'namingStyle' && (
+                          <select
+                            className="preference-select"
+                            value={pref.preference_value}
+                            onChange={(e) => handleUpdatePreference(pref.preference_key, e.target.value)}
+                          >
+                            <option value="concise">简洁（优先使用短单词）</option>
+                            <option value="balanced">平衡（适中长度）</option>
+                            <option value="detailed">详细（优先使用完整单词）</option>
+                          </select>
+                        )}
+                        {pref.preference_key === 'wordPreference' && (
+                          <select
+                            className="preference-select"
+                            value={pref.preference_value}
+                            onChange={(e) => handleUpdatePreference(pref.preference_key, e.target.value)}
+                          >
+                            <option value="standard">标准（通用英语）</option>
+                            <option value="american">美式英语</option>
+                            <option value="british">英式英语</option>
+                          </select>
+                        )}
+                        {pref.preference_key === 'abbreviationThreshold' && (
+                          <select
+                            className="preference-select"
+                            value={pref.preference_value}
+                            onChange={(e) => handleUpdatePreference(pref.preference_key, e.target.value)}
+                          >
+                            <option value="2">2 个字符以上考虑缩写</option>
+                            <option value="3">3 个字符以上考虑缩写</option>
+                            <option value="4">4 个字符以上考虑缩写</option>
+                            <option value="5">5 个字符以上考虑缩写</option>
+                          </select>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : (
+              <section className="glossary-section">
+                <div className="settings-header">
+                  <h2 className="settings-title">术语表管理</h2>
+                  <p className="settings-description">管理自定义术语映射，生成命名时会优先使用这些术语进行翻译</p>
+                  <button
+                    className="add-term-btn"
+                    onClick={() => setShowAddModal(true)}
+                  >
+                    + 添加术语
+                  </button>
+                </div>
+
+                <div className="glossary-search-section">
+                  <input
+                    type="text"
+                    className="glossary-search-input"
+                    placeholder="搜索术语（中文或英文）..."
+                    value={glossarySearchKeyword}
+                    onChange={(e) => setGlossarySearchKeyword(e.target.value)}
+                    onKeyDown={handleGlossarySearch}
+                  />
+                  <button
+                    className="glossary-search-btn"
+                    onClick={() => loadGlossaryTerms(glossarySearchKeyword)}
+                  >
+                    搜索
+                  </button>
+                  <button
+                    className="glossary-refresh-btn"
+                    onClick={() => {
+                      setGlossarySearchKeyword('')
+                      loadGlossaryTerms('')
+                    }}
+                  >
+                    刷新
+                  </button>
+                </div>
+
+                {glossaryTerms.length === 0 ? (
+                  <div className="empty-section">
+                    <p className="empty-text">
+                      {glossarySearchKeyword 
+                        ? '没有找到匹配的术语' 
+                        : '暂无术语记录，点击"添加术语"开始创建'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="glossary-list">
+                    <div className="glossary-table-header">
+                      <span className="glossary-col-priority">优先级</span>
+                      <span className="glossary-col-chinese">中文术语</span>
+                      <span className="glossary-col-english">英文术语</span>
+                      <span className="glossary-col-description">描述</span>
+                      <span className="glossary-col-actions">操作</span>
+                    </div>
+                    {glossaryTerms.map((term) => (
+                      <div key={term.id} className="glossary-item">
+                        {editingTerm?.id === term.id ? (
+                          <>
+                            <div className="glossary-col-priority">
+                              <input
+                                type="number"
+                                className="glossary-input priority-input"
+                                value={editingTerm.priority}
+                                onChange={(e) => setEditingTerm({ ...editingTerm, priority: parseInt(e.target.value) || 0 })}
+                              />
+                            </div>
+                            <div className="glossary-col-chinese">
+                              <input
+                                type="text"
+                                className="glossary-input"
+                                value={editingTerm.chinese_term}
+                                onChange={(e) => setEditingTerm({ ...editingTerm, chinese_term: e.target.value })}
+                              />
+                            </div>
+                            <div className="glossary-col-english">
+                              <input
+                                type="text"
+                                className="glossary-input"
+                                value={editingTerm.english_term}
+                                onChange={(e) => setEditingTerm({ ...editingTerm, english_term: e.target.value })}
+                              />
+                            </div>
+                            <div className="glossary-col-description">
+                              <input
+                                type="text"
+                                className="glossary-input"
+                                value={editingTerm.description}
+                                onChange={(e) => setEditingTerm({ ...editingTerm, description: e.target.value })}
+                              />
+                            </div>
+                            <div className="glossary-col-actions">
+                              <button
+                                className="save-edit-btn"
+                                onClick={handleUpdateGlossaryTerm}
+                              >
+                                保存
+                              </button>
+                              <button
+                                className="cancel-edit-btn"
+                                onClick={() => setEditingTerm(null)}
+                              >
+                                取消
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <span className="glossary-col-priority">{term.priority}</span>
+                            <span className="glossary-col-chinese">{term.chinese_term}</span>
+                            <span className="glossary-col-english">{term.english_term}</span>
+                            <span className="glossary-col-description">{term.description || '-'}</span>
+                            <div className="glossary-col-actions">
+                              <button
+                                className="edit-term-btn"
+                                onClick={() => setEditingTerm(term)}
+                                title="编辑"
+                              >
+                                编辑
+                              </button>
+                              <button
+                                className="delete-term-btn"
+                                onClick={() => handleDeleteGlossaryTerm(term.id)}
+                                title="删除"
+                              >
+                                删除
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
+
+            {(showAddModal || editingTerm) && (
+              <div className="modal-overlay" onClick={() => {
+                if (showAddModal) setShowAddModal(false)
+                if (editingTerm) setEditingTerm(null)
+              }}>
+                <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                  <h3 className="modal-title">{showAddModal ? '添加新术语' : '编辑术语'}</h3>
+                  <div className="modal-form">
+                    <div className="form-group">
+                      <label className="form-label">优先级</label>
+                      <input
+                        type="number"
+                        className="form-input"
+                        value={showAddModal ? newTermForm.priority : editingTerm?.priority || 0}
+                        onChange={(e) => showAddModal 
+                          ? setNewTermForm({ ...newTermForm, priority: parseInt(e.target.value) || 0 })
+                          : editingTerm && setEditingTerm({ ...editingTerm, priority: parseInt(e.target.value) || 0 })
+                        }
+                        placeholder="数字越大优先级越高"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">中文术语 *</label>
+                      <input
+                        type="text"
+                        className="form-input"
+                        value={showAddModal ? newTermForm.chineseTerm : editingTerm?.chinese_term || ''}
+                        onChange={(e) => showAddModal 
+                          ? setNewTermForm({ ...newTermForm, chineseTerm: e.target.value })
+                          : editingTerm && setEditingTerm({ ...editingTerm, chinese_term: e.target.value })
+                        }
+                        placeholder="例如：用户"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">英文术语 *</label>
+                      <input
+                        type="text"
+                        className="form-input"
+                        value={showAddModal ? newTermForm.englishTerm : editingTerm?.english_term || ''}
+                        onChange={(e) => showAddModal 
+                          ? setNewTermForm({ ...newTermForm, englishTerm: e.target.value })
+                          : editingTerm && setEditingTerm({ ...editingTerm, english_term: e.target.value })
+                        }
+                        placeholder="例如：user"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">描述</label>
+                      <input
+                        type="text"
+                        className="form-input"
+                        value={showAddModal ? newTermForm.description : editingTerm?.description || ''}
+                        onChange={(e) => showAddModal 
+                          ? setNewTermForm({ ...newTermForm, description: e.target.value })
+                          : editingTerm && setEditingTerm({ ...editingTerm, description: e.target.value })
+                        }
+                        placeholder="可选，用于说明术语的使用场景"
+                      />
+                    </div>
+                  </div>
+                  <div className="modal-actions">
+                    <button
+                      className="modal-cancel-btn"
+                      onClick={() => {
+                        if (showAddModal) setShowAddModal(false)
+                        if (editingTerm) setEditingTerm(null)
+                      }}
+                    >
+                      取消
+                    </button>
+                    <button
+                      className="modal-confirm-btn"
+                      onClick={() => {
+                        if (showAddModal) handleAddGlossaryTerm()
+                        if (editingTerm) handleUpdateGlossaryTerm()
+                      }}
+                    >
+                      确认
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
           </>
         )}
