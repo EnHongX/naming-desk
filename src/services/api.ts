@@ -19,6 +19,12 @@ export interface NamingResults {
   gitBranch: string
 }
 
+export interface GenerateResult {
+  originalInput: string
+  results: NamingResults
+  error?: string
+}
+
 const API_BASE = '/api'
 
 async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
@@ -83,6 +89,22 @@ export async function deleteHistory(id: number): Promise<{ success: boolean }> {
   return request(`/history/${id}`, {
     method: 'DELETE',
   })
+}
+
+export async function generateNaming(input: string): Promise<NamingResults> {
+  const response = await request<{ success: boolean; results: NamingResults }>('/generate', {
+    method: 'POST',
+    body: JSON.stringify({ input }),
+  })
+  return response.results
+}
+
+export async function generateNamingBatch(inputs: string[]): Promise<GenerateResult[]> {
+  const response = await request<{ success: boolean; results: GenerateResult[] }>('/generate/batch', {
+    method: 'POST',
+    body: JSON.stringify({ inputs }),
+  })
+  return response.results
 }
 
 export function historyItemToResults(item: HistoryItem): NamingResults {
