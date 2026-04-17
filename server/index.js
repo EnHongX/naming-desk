@@ -16,7 +16,18 @@ import {
   getGlossaryTermByChinese,
   addGlossaryTerm,
   updateGlossaryTerm,
-  deleteGlossaryTerm
+  deleteGlossaryTerm,
+  createProject,
+  getProjectById,
+  getAllProjects,
+  updateProject,
+  deleteProject,
+  addProjectNamingItem,
+  getProjectNamingItemById,
+  getProjectNamingItems,
+  updateProjectNamingItemFinalResults,
+  deleteProjectNamingItem,
+  getProjectWithNamingItems
 } from './database.js'
 import { generateNamingWithAI, generateNamingWithAIWithContext } from './qwenService.js'
 
@@ -373,6 +384,183 @@ app.delete('/api/glossary/:id', async (req, res) => {
   } catch (error) {
     console.error('Error deleting glossary term:', error)
     res.status(500).json({ error: 'Failed to delete glossary term' })
+  }
+})
+
+app.post('/api/projects', async (req, res) => {
+  try {
+    const { name, description } = req.body
+    
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'name is required' })
+    }
+
+    const project = createProject(name.trim(), description || '')
+    res.json({
+      success: true,
+      project
+    })
+  } catch (error) {
+    console.error('Error creating project:', error)
+    res.status(500).json({ error: 'Failed to create project' })
+  }
+})
+
+app.get('/api/projects', async (req, res) => {
+  try {
+    const { keyword, limit = 50, offset = 0 } = req.query
+    
+    const options = {
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    }
+    
+    if (keyword) {
+      options.keyword = keyword
+    }
+
+    const projects = getAllProjects(options)
+    res.json({
+      success: true,
+      projects,
+      total: projects.length
+    })
+  } catch (error) {
+    console.error('Error getting projects:', error)
+    res.status(500).json({ error: 'Failed to get projects' })
+  }
+})
+
+app.get('/api/projects/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    const project = getProjectWithNamingItems(parseInt(id))
+    
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' })
+    }
+    
+    res.json({
+      success: true,
+      project
+    })
+  } catch (error) {
+    console.error('Error getting project:', error)
+    res.status(500).json({ error: 'Failed to get project' })
+  }
+})
+
+app.put('/api/projects/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { name, description } = req.body
+    
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'name is required' })
+    }
+
+    const updatedProject = updateProject(parseInt(id), name.trim(), description || '')
+    
+    if (!updatedProject) {
+      return res.status(404).json({ error: 'Project not found' })
+    }
+    
+    res.json({
+      success: true,
+      project: updatedProject
+    })
+  } catch (error) {
+    console.error('Error updating project:', error)
+    res.status(500).json({ error: 'Failed to update project' })
+  }
+})
+
+app.delete('/api/projects/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    const result = deleteProject(parseInt(id))
+    res.json(result)
+  } catch (error) {
+    console.error('Error deleting project:', error)
+    res.status(500).json({ error: 'Failed to delete project' })
+  }
+})
+
+app.post('/api/projects/:id/naming-items/generate', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { inputs } = req.body
+    
+    const project = getProjectById(parseInt(id))
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' })
+    }
+    
+    if (!inputs || !Array.isArray(inputs) || inputs.length === 0) {
+      return res.status(400).json({ error: 'inputs array is required' })
+    }
+
+    const preferences = getAllPreferences()
+    const glossaryTerms = getAllGlossaryTerms({ limit: 1000 })
+    
+    const results = []
+    
+    for (const input of inputs) {
+      try {
+        const namingResult = await generateNamingWithAIWithContext(input, preferences, glossaryTerms)
+        const namingItem = addProjectNamingItem(parseInt(id), input, namingResult)
+        results.push({
+          success: true,
+          namingItem
+        })
+      } catch (error) {
+        results.push({
+          success: false,
+          originalInput: input,
+          error: error.message
+        })
+      }
+    }
+    
+    res.json({
+      success: true,
+      results
+    })
+  } catch (error) {
+    console.error('Error generating naming items for project:', error)
+    res.status(500).json({ error: 'Failed to generate naming items' })
+  }
+})
+
+app.put('/api/projects/naming-items/:itemId', async (req, res) => {
+  try {
+    const { itemId } = req.params
+    const { finalResults } = req.body
+    
+    const updatedItem = updateProjectNamingItemFinalResults(parseInt(itemId), finalResults)
+    
+    if (!updatedItem) {
+      return res.status(404).json({ error: 'Naming item not found' })
+    }
+    
+    res.json({
+      success: true,
+      namingItem: updatedItem
+    })
+  } catch (error) {
+    console.error('Error updating naming item:', error)
+    res.status(500).json({ error: 'Failed to update naming item' })
+  }
+})
+
+app.delete('/api/projects/naming-items/:itemId', async (req, res) => {
+  try {
+    const { itemId } = req.params
+    const result = deleteProjectNamingItem(parseInt(itemId))
+    res.json(result)
+  } catch (error) {
+    console.error('Error deleting naming item:', error)
+    res.status(500).json({ error: 'Failed to delete naming item' })
   }
 })
 

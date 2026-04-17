@@ -226,3 +226,127 @@ export async function deleteGlossaryTerm(id: number): Promise<{ success: boolean
     method: 'DELETE',
   })
 }
+
+export interface NamingResults {
+  githubRepo: string
+  camelCase: string
+  snakeCase: string
+  gitBranch: string
+}
+
+export interface Project {
+  id: number
+  name: string
+  description: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectNamingItem {
+  id: number
+  project_id: number
+  original_input: string
+  generated_results: NamingResults | null
+  final_results: NamingResults | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectWithNamingItems extends Project {
+  namingItems: ProjectNamingItem[]
+}
+
+export async function createProject(data: {
+  name: string
+  description?: string
+}): Promise<Project> {
+  const response = await request<{ success: boolean; project: Project }>('/projects', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  return response.project
+}
+
+export async function getAllProjects(options?: {
+  keyword?: string
+  limit?: number
+  offset?: number
+}): Promise<Project[]> {
+  const params = new URLSearchParams()
+  
+  if (options?.keyword) {
+    params.append('keyword', options.keyword)
+  }
+  if (options?.limit !== undefined) {
+    params.append('limit', String(options.limit))
+  }
+  if (options?.offset !== undefined) {
+    params.append('offset', String(options.offset))
+  }
+
+  const queryString = params.toString()
+  const response = await request<{ success: boolean; projects: Project[] }>(
+    `/projects${queryString ? `?${queryString}` : ''}`
+  )
+  return response.projects
+}
+
+export async function getProjectById(id: number): Promise<ProjectWithNamingItems> {
+  const response = await request<{ success: boolean; project: ProjectWithNamingItems }>(`/projects/${id}`)
+  return response.project
+}
+
+export async function updateProject(id: number, data: {
+  name: string
+  description?: string
+}): Promise<Project> {
+  const response = await request<{ success: boolean; project: Project }>(`/projects/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+  return response.project
+}
+
+export async function deleteProject(id: number): Promise<{ success: boolean }> {
+  return request(`/projects/${id}`, {
+    method: 'DELETE',
+  })
+}
+
+export interface GenerateNamingItemResult {
+  success: boolean
+  namingItem?: ProjectNamingItem
+  originalInput?: string
+  error?: string
+}
+
+export async function generateProjectNamingItems(projectId: number, inputs: string[]): Promise<GenerateNamingItemResult[]> {
+  const response = await request<{ success: boolean; results: GenerateNamingItemResult[] }>(
+    `/projects/${projectId}/naming-items/generate`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ inputs }),
+    }
+  )
+  return response.results
+}
+
+export async function updateProjectNamingItemFinalResults(
+  itemId: number,
+  finalResults: NamingResults
+): Promise<ProjectNamingItem> {
+  const response = await request<{ success: boolean; namingItem: ProjectNamingItem }>(
+    `/projects/naming-items/${itemId}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ finalResults }),
+    }
+  )
+  return response.namingItem
+}
+
+export async function deleteProjectNamingItem(itemId: number): Promise<{ success: boolean }> {
+  return request(`/projects/naming-items/${itemId}`, {
+    method: 'DELETE',
+  })
+}
