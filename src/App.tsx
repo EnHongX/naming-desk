@@ -16,11 +16,22 @@ import {
   getAllGlossaryTerms,
   addGlossaryTerm,
   updateGlossaryTerm,
-  deleteGlossaryTerm
+  deleteGlossaryTerm,
+  Project,
+  ProjectNamingItem,
+  ProjectWithNamingItems,
+  createProject,
+  getAllProjects,
+  getProjectById,
+  updateProject,
+  deleteProject,
+  generateProjectNamingItems,
+  updateProjectNamingItemFinalResults,
+  deleteProjectNamingItem
 } from './services/api'
 import './App.css'
 
-type ViewMode = 'generator' | 'history' | 'favorites' | 'settings'
+type ViewMode = 'generator' | 'history' | 'favorites' | 'settings' | 'projects' | 'projectDetail'
 
 type SettingsTab = 'preferences' | 'glossary'
 
@@ -67,6 +78,18 @@ function App() {
     priority: 0,
     description: ''
   })
+
+  const [projects, setProjects] = useState<Project[]>([])
+  const [currentProject, setCurrentProject] = useState<ProjectWithNamingItems | null>(null)
+  const [projectSearchKeyword, setProjectSearchKeyword] = useState('')
+  const [showAddProjectModal, setShowAddProjectModal] = useState(false)
+  const [newProjectForm, setNewProjectForm] = useState({
+    name: '',
+    description: ''
+  })
+  const [editingProject, setEditingProject] = useState<Project | null>(null)
+  const [projectItemInput, setProjectItemInput] = useState('')
+  const [projectItemGenerating, setProjectItemGenerating] = useState(false)
 
   const loadHistory = useCallback(async (mode: 'all' | 'favorites' = 'all', keyword?: string) => {
     try {
@@ -130,8 +153,10 @@ function App() {
       } else {
         loadGlossaryTerms(glossarySearchKeyword)
       }
+    } else if (viewMode === 'projects') {
+      loadProjects(projectSearchKeyword)
     }
-  }, [viewMode, loadHistory, searchKeyword, settingsTab, loadPreferences, loadGlossaryTerms, glossarySearchKeyword])
+  }, [viewMode, loadHistory, searchKeyword, settingsTab, loadPreferences, loadGlossaryTerms, glossarySearchKeyword, loadProjects, projectSearchKeyword])
 
   const convertResultsToNamingResult = (results: NamingResults): NamingResult[] => {
     return [
@@ -376,6 +401,165 @@ function App() {
     }
   }, [loadHistory, viewMode, searchKeyword])
 
+  const loadProjects = useCallback(async (keyword?: string) => {
+    try {
+      setLoading(true)
+      setError(null)
+      const options: { keyword?: string } = {}
+      if (keyword && keyword.trim()) {
+        options.keyword = keyword.trim()
+      }
+      const items = await getAllProjects(options)
+      setProjects(items)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载项目列表失败')
+      console.error('Load projects error:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const loadProjectDetail = useCallback(async (projectId: number) => {
+    try {
+      setLoading(true)
+      setError(null)
+      const project = await getProjectById(projectId)
+      setCurrentProject(project)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载项目详情失败')
+      console.error('Load project detail error:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const handleCreateProject = useCallback(async () => {
+    try {
+      if (!newProjectForm.name.trim()) {
+        setError('项目名称不能为空')
+        return
+      }
+
+      const newProject = await createProject(newProjectForm)
+      setProjects(prev => [newProject, ...prev])
+      setShowAddProjectModal(false)
+      setNewProjectForm({ name: '', description: '' })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '创建项目失败')
+      console.error('Create project error:', err)
+    }
+  }, [newProjectForm])
+
+  const handleUpdateProject = useCallback(async () => {
+    if (!editingProject) return
+    
+    try {
+      if (!editingProject.name.trim()) {
+        setError('项目名称不能为空')
+        return
+      }
+
+      const updated = await updateProject(editingProject.id, {
+        name: editingProject.name,
+        description: editingProject.description
+      })
+      setProjects(prev => 
+        prev.map(p => p.id === editingProject.id ? updated : p)
+      )
+      setEditingProject(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '更新项目失败')
+      console.error('Update project error:', err)
+    }
+  }, [editingProject])
+
+  const handleDeleteProject = useCallback(async (id: number) => {
+    try {
+      await deleteProject(id)
+      setProjects(prev => prev.filter(p => p.id !== id))
+      if (currentProject?.id === id) {
+        setCurrentProject(null)
+        setViewMode('projects')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除项目失败')
+      console.error('Delete project error:', err)
+    }
+  }, [currentProject])
+
+  const handleGenerateProjectNamingItems = useCallback(async () => {
+    if (!currentProject) return
+    
+    const lines = projectItemInput.split('\n').filter(line => line.trim())
+    
+    if (lines.length === 0) {
+      return
+    }
+
+    try {
+      setProjectItemGenerating(true)
+      setError(null)
+      
+      const results = await generateProjectNamingItems(currentProject.id, lines)
+      
+      const newItems: ProjectNamingItem[] = []
+      for (const result of results) {
+        if (result.success && result.namingItem) {
+          newItems.push(result.namingItem)
+        } else {
+          console.error(`Generate failed for "${result.originalInput}":`, result.error)
+        }
+      }
+      
+      if (newItems.length > 0) {
+        setCurrentProject(prev => prev ? {
+          ...prev,
+          namingItems: [...newItems, ...prev.namingItems]
+        } : null)
+        setProjectItemInput('')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '生成命名失败')
+      console.error('Generate project naming items error:', err)
+    } finally {
+      setProjectItemGenerating(false)
+    }
+  }, [currentProject, projectItemInput])
+
+  const handleSaveFinalResults = useCallback(async (itemId: number, finalResults: NamingResults) => {
+    try {
+      const updated = await updateProjectNamingItemFinalResults(itemId, finalResults)
+      setCurrentProject(prev => prev ? {
+        ...prev,
+        namingItems: prev.namingItems.map(item => 
+          item.id === itemId ? updated : item
+        )
+      } : null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存最终方案失败')
+      console.error('Save final results error:', err)
+    }
+  }, [])
+
+  const handleDeleteProjectNamingItem = useCallback(async (itemId: number) => {
+    try {
+      await deleteProjectNamingItem(itemId)
+      setCurrentProject(prev => prev ? {
+        ...prev,
+        namingItems: prev.namingItems.filter(item => item.id !== itemId)
+      } : null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除命名项失败')
+      console.error('Delete naming item error:', err)
+    }
+  }, [])
+
+  const handleProjectSearch = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      loadProjects(projectSearchKeyword)
+    }
+  }, [loadProjects, projectSearchKeyword])
+
   const isCopied = (itemId: string, type: NamingType | 'all') => {
     return copiedState?.itemId === itemId && copiedState?.type === type
   }
@@ -404,6 +588,17 @@ function App() {
           onClick={() => setViewMode('generator')}
         >
           命名生成
+        </button>
+        <button
+          className={`nav-tab ${viewMode === 'projects' || viewMode === 'projectDetail' ? 'active' : ''}`}
+          onClick={() => {
+            if (viewMode === 'projectDetail') {
+              setCurrentProject(null)
+            }
+            setViewMode('projects')
+          }}
+        >
+          项目工作区
         </button>
         <button
           className={`nav-tab ${viewMode === 'history' ? 'active' : ''}`}
@@ -993,6 +1188,397 @@ function App() {
               </div>
             )}
           </>
+        )}
+
+        {viewMode === 'projects' && (
+          <>
+            <section className="search-section">
+              <input
+                type="text"
+                className="search-input"
+                placeholder="搜索项目..."
+                value={projectSearchKeyword}
+                onChange={(e) => setProjectSearchKeyword(e.target.value)}
+                onKeyDown={handleProjectSearch}
+              />
+              <button
+                className="search-btn"
+                onClick={() => loadProjects(projectSearchKeyword)}
+              >
+                搜索
+              </button>
+              <button
+                className="refresh-btn"
+                onClick={() => {
+                  setProjectSearchKeyword('')
+                  loadProjects('')
+                }}
+              >
+                刷新
+              </button>
+              <button
+                className="add-term-btn"
+                onClick={() => setShowAddProjectModal(true)}
+              >
+                + 新建项目
+              </button>
+            </section>
+
+            {error && (
+              <div className="error-message">
+                {error}
+              </div>
+            )}
+
+            {loading ? (
+              <div className="loading-section">
+                <p className="loading-text">加载中...</p>
+              </div>
+            ) : projects.length === 0 ? (
+              <section className="empty-section">
+                <p className="empty-text">
+                  {projectSearchKeyword 
+                    ? '没有找到匹配的项目' 
+                    : '暂无项目，点击"新建项目"开始创建'}
+                </p>
+              </section>
+            ) : (
+              <section className="projects-section">
+                <div className="projects-header">
+                  <h2 className="projects-title">
+                    项目列表
+                    <span className="projects-count">({projects.length} 个)</span>
+                  </h2>
+                </div>
+                
+                <div className="projects-list">
+                  {projects.map((project, index) => (
+                    <div key={project.id} className="project-card">
+                      {editingProject?.id === project.id ? (
+                        <div className="project-edit-form">
+                          <input
+                            type="text"
+                            className="form-input"
+                            value={editingProject.name}
+                            onChange={(e) => setEditingProject({ ...editingProject, name: e.target.value })}
+                            placeholder="项目名称"
+                          />
+                          <textarea
+                            className="form-input"
+                            value={editingProject.description}
+                            onChange={(e) => setEditingProject({ ...editingProject, description: e.target.value })}
+                            placeholder="项目描述（可选）"
+                            rows={2}
+                          />
+                          <div className="project-edit-actions">
+                            <button
+                              className="modal-confirm-btn"
+                              onClick={handleUpdateProject}
+                            >
+                              保存
+                            </button>
+                            <button
+                              className="modal-cancel-btn"
+                              onClick={() => setEditingProject(null)}
+                            >
+                              取消
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="project-card-header">
+                            <span className="batch-item-number">#{index + 1}</span>
+                            <h3 className="project-card-title">{project.name}</h3>
+                            <span className="project-card-date">{formatDate(project.updated_at)}</span>
+                          </div>
+                          {project.description && (
+                            <p className="project-card-description">{project.description}</p>
+                          )}
+                          <div className="project-card-meta">
+                            <span className="project-card-count">
+                              {currentProject?.id === project.id 
+                                ? currentProject.namingItems.length 
+                                : '...'} 个命名项
+                            </span>
+                            <span className="project-card-created">
+                              创建于 {formatDate(project.created_at)}
+                            </span>
+                          </div>
+                          <div className="project-card-actions">
+                            <button
+                              className="use-btn"
+                              onClick={async () => {
+                                await loadProjectDetail(project.id)
+                                setViewMode('projectDetail')
+                              }}
+                              title="进入项目"
+                            >
+                              进入
+                            </button>
+                            <button
+                              className="edit-term-btn"
+                              onClick={() => setEditingProject(project)}
+                              title="编辑项目"
+                            >
+                              编辑
+                            </button>
+                            <button
+                              className="delete-term-btn"
+                              onClick={() => {
+                                if (confirm('确定要删除这个项目吗？所有命名项也将被删除。')) {
+                                  handleDeleteProject(project.id)
+                                }
+                              }}
+                              title="删除项目"
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+          </>
+        )}
+
+        {viewMode === 'projectDetail' && currentProject && (
+          <>
+            <section className="project-header-section">
+              <button
+                className="back-btn"
+                onClick={() => {
+                  setCurrentProject(null)
+                  setViewMode('projects')
+                }}
+              >
+                ← 返回项目列表
+              </button>
+              <div className="project-header-info">
+                <h2 className="project-header-title">{currentProject.name}</h2>
+                {currentProject.description && (
+                  <p className="project-header-description">{currentProject.description}</p>
+                )}
+              </div>
+            </section>
+
+            <section className="input-section">
+              <label className="input-label">添加命名项（每行一条）</label>
+              <textarea
+                className="input-textarea"
+                placeholder="例如：&#10;用户订单列表&#10;新增商品详情页面&#10;修复登录验证bug..."
+                value={projectItemInput}
+                onChange={(e) => setProjectItemInput(e.target.value)}
+                rows={4}
+              />
+              <div className="input-hint">
+                <span>提示：每行输入一条描述，点击按钮生成命名</span>
+              </div>
+              <button 
+                className="generate-btn" 
+                onClick={handleGenerateProjectNamingItems} 
+                disabled={!projectItemInput.trim() || projectItemGenerating}
+              >
+                {projectItemGenerating ? '生成中...' : '生成命名'}
+              </button>
+            </section>
+
+            {error && (
+              <div className="error-message">
+                {error}
+              </div>
+            )}
+
+            {currentProject.namingItems.length === 0 ? (
+              <section className="empty-section">
+                <p className="empty-text">
+                  暂无命名项，输入描述后点击"生成命名"开始
+                </p>
+              </section>
+            ) : (
+              <section className="results-section">
+                <div className="results-header">
+                  <h2 className="results-title">命名项（共 {currentProject.namingItems.length} 条）</h2>
+                </div>
+                
+                <div className="batch-results-list">
+                  {currentProject.namingItems.map((item, itemIndex) => {
+                    const results = item.final_results || item.generated_results
+                    const hasFinalResults = !!item.final_results
+                    
+                    return (
+                      <div key={item.id} className={`batch-item ${hasFinalResults ? 'finalized' : ''}`}>
+                        <div className="batch-item-header">
+                          <span className="batch-item-number">#{itemIndex + 1}</span>
+                          <span className="batch-item-original">{item.original_input}</span>
+                          {hasFinalResults && (
+                            <span className="final-badge">已确认</span>
+                          )}
+                          <span className="batch-item-date">{formatDate(item.created_at)}</span>
+                          <button
+                            className="delete-term-btn"
+                            onClick={() => {
+                              if (confirm('确定要删除这个命名项吗？')) {
+                                handleDeleteProjectNamingItem(item.id)
+                              }
+                            }}
+                            title="删除"
+                          >
+                            删除
+                          </button>
+                        </div>
+                        
+                        {results && (
+                          <>
+                            <div className="batch-item-results">
+                              <div className="result-card">
+                                <div className="result-header">
+                                  <span className="result-label">GitHub 仓库名</span>
+                                  <button
+                                    className={`copy-btn ${isCopied(`project-${item.id}`, NamingType.GITHUB_REPO) ? 'copied' : ''}`}
+                                    onClick={() => handleCopy(results.githubRepo, `project-${item.id}`, NamingType.GITHUB_REPO)}
+                                    disabled={!results.githubRepo}
+                                  >
+                                    {isCopied(`project-${item.id}`, NamingType.GITHUB_REPO) ? '已复制' : '复制'}
+                                  </button>
+                                </div>
+                                <div className="result-value">
+                                  {results.githubRepo || <span className="placeholder">无有效命名</span>}
+                                </div>
+                              </div>
+                              
+                              <div className="result-card">
+                                <div className="result-header">
+                                  <span className="result-label">camelCase 字段名</span>
+                                  <button
+                                    className={`copy-btn ${isCopied(`project-${item.id}`, NamingType.CAMEL_CASE) ? 'copied' : ''}`}
+                                    onClick={() => handleCopy(results.camelCase, `project-${item.id}`, NamingType.CAMEL_CASE)}
+                                    disabled={!results.camelCase}
+                                  >
+                                    {isCopied(`project-${item.id}`, NamingType.CAMEL_CASE) ? '已复制' : '复制'}
+                                  </button>
+                                </div>
+                                <div className="result-value">
+                                  {results.camelCase || <span className="placeholder">无有效命名</span>}
+                                </div>
+                              </div>
+                              
+                              <div className="result-card">
+                                <div className="result-header">
+                                  <span className="result-label">snake_case 字段名</span>
+                                  <button
+                                    className={`copy-btn ${isCopied(`project-${item.id}`, NamingType.SNAKE_CASE) ? 'copied' : ''}`}
+                                    onClick={() => handleCopy(results.snakeCase, `project-${item.id}`, NamingType.SNAKE_CASE)}
+                                    disabled={!results.snakeCase}
+                                  >
+                                    {isCopied(`project-${item.id}`, NamingType.SNAKE_CASE) ? '已复制' : '复制'}
+                                  </button>
+                                </div>
+                                <div className="result-value">
+                                  {results.snakeCase || <span className="placeholder">无有效命名</span>}
+                                </div>
+                              </div>
+                              
+                              <div className="result-card">
+                                <div className="result-header">
+                                  <span className="result-label">Git 分支名</span>
+                                  <button
+                                    className={`copy-btn ${isCopied(`project-${item.id}`, NamingType.GIT_BRANCH) ? 'copied' : ''}`}
+                                    onClick={() => handleCopy(results.gitBranch, `project-${item.id}`, NamingType.GIT_BRANCH)}
+                                    disabled={!results.gitBranch}
+                                  >
+                                    {isCopied(`project-${item.id}`, NamingType.GIT_BRANCH) ? '已复制' : '复制'}
+                                  </button>
+                                </div>
+                                <div className="result-value">
+                                  {results.gitBranch || <span className="placeholder">无有效命名</span>}
+                                </div>
+                              </div>
+                            </div>
+                            
+                            {!hasFinalResults && item.generated_results && (
+                              <div className="save-final-section">
+                                <button
+                                  className="save-final-btn"
+                                  onClick={() => {
+                                    handleSaveFinalResults(item.id, item.generated_results!)
+                                  }}
+                                >
+                                  ✓ 确认此方案为最终命名
+                                </button>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </section>
+            )}
+          </>
+        )}
+
+        {(showAddProjectModal || editingProject) && (
+          <div className="modal-overlay" onClick={() => {
+            if (showAddProjectModal) setShowAddProjectModal(false)
+            if (editingProject) setEditingProject(null)
+          }}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+              <h3 className="modal-title">{showAddProjectModal ? '新建项目' : '编辑项目'}</h3>
+              <div className="modal-form">
+                <div className="form-group">
+                  <label className="form-label">项目名称 *</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={showAddProjectModal ? newProjectForm.name : editingProject?.name || ''}
+                    onChange={(e) => showAddProjectModal 
+                      ? setNewProjectForm({ ...newProjectForm, name: e.target.value })
+                      : editingProject && setEditingProject({ ...editingProject, name: e.target.value })
+                    }
+                    placeholder="例如：用户管理系统"
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">项目描述</label>
+                  <textarea
+                    className="form-input"
+                    value={showAddProjectModal ? newProjectForm.description : editingProject?.description || ''}
+                    onChange={(e) => showAddProjectModal 
+                      ? setNewProjectForm({ ...newProjectForm, description: e.target.value })
+                      : editingProject && setEditingProject({ ...editingProject, description: e.target.value })
+                    }
+                    placeholder="可选，用于描述项目用途"
+                    rows={3}
+                  />
+                </div>
+              </div>
+              <div className="modal-actions">
+                <button
+                  className="modal-cancel-btn"
+                  onClick={() => {
+                    if (showAddProjectModal) setShowAddProjectModal(false)
+                    if (editingProject) setEditingProject(null)
+                  }}
+                >
+                  取消
+                </button>
+                <button
+                  className="modal-confirm-btn"
+                  onClick={() => {
+                    if (showAddProjectModal) handleCreateProject()
+                    if (editingProject) handleUpdateProject()
+                  }}
+                >
+                  确认
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </main>
 
