@@ -32,7 +32,7 @@ import {
 import { generateNamingWithAI, generateNamingWithAIWithContext } from './qwenService.js'
 
 const app = express()
-const PORT = 3002
+const PORT = 3003
 
 app.use(cors())
 app.use(express.json())
