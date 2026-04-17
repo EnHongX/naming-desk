@@ -130,3 +130,99 @@ export function historyItemToNamingResults(item: HistoryItem, type: NamingType):
       return ''
   }
 }
+
+export interface Preference {
+  id: number
+  preference_key: string
+  preference_value: string
+  description: string
+  created_at: string
+  updated_at: string
+}
+
+export interface GlossaryTerm {
+  id: number
+  chinese_term: string
+  english_term: string
+  priority: number
+  description: string
+  created_at: string
+  updated_at: string
+}
+
+export async function getAllPreferences(): Promise<Preference[]> {
+  const response = await request<{ success: boolean; preferences: Preference[] }>('/preferences')
+  return response.preferences
+}
+
+export async function getPreferenceByKey(key: string): Promise<Preference> {
+  return request(`/preferences/${key}`)
+}
+
+export async function updatePreference(key: string, value: string): Promise<Preference> {
+  const response = await request<{ success: boolean; preference: Preference }>(`/preferences/${key}`, {
+    method: 'PUT',
+    body: JSON.stringify({ value }),
+  })
+  return response.preference
+}
+
+export async function getAllGlossaryTerms(options?: {
+  keyword?: string
+  limit?: number
+  offset?: number
+}): Promise<GlossaryTerm[]> {
+  const params = new URLSearchParams()
+  
+  if (options?.keyword) {
+    params.append('keyword', options.keyword)
+  }
+  if (options?.limit !== undefined) {
+    params.append('limit', String(options.limit))
+  }
+  if (options?.offset !== undefined) {
+    params.append('offset', String(options.offset))
+  }
+
+  const queryString = params.toString()
+  const response = await request<{ success: boolean; terms: GlossaryTerm[] }>(
+    `/glossary${queryString ? `?${queryString}` : ''}`
+  )
+  return response.terms
+}
+
+export async function getGlossaryTermById(id: number): Promise<GlossaryTerm> {
+  return request(`/glossary/${id}`)
+}
+
+export async function addGlossaryTerm(term: {
+  chineseTerm: string
+  englishTerm: string
+  priority?: number
+  description?: string
+}): Promise<GlossaryTerm> {
+  const response = await request<{ success: boolean; term: GlossaryTerm }>('/glossary', {
+    method: 'POST',
+    body: JSON.stringify(term),
+  })
+  return response.term
+}
+
+export async function updateGlossaryTerm(id: number, term: {
+  chineseTerm: string
+  englishTerm: string
+  priority?: number
+  description?: string
+}): Promise<GlossaryTerm> {
+  const response = await request<{ success: boolean; term: GlossaryTerm }>(`/glossary/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(term),
+  })
+  return response.term
+}
+
+export async function deleteGlossaryTerm(id: number): Promise<{ success: boolean }> {
+  return request(`/glossary/${id}`, {
+    method: 'DELETE',
+  })
+}
