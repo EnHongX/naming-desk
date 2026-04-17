@@ -686,3 +686,180 @@ export function getProjectWithNamingItems(projectId) {
     namingItems
   }
 }
+
+export function detectNamingStyle(name) {
+  if (!name || typeof name !== 'string') {
+    return { style: 'unknown', description: '未知命名风格' }
+  }
+
+  if (/^[a-z]+(?:-[a-z]+)*$/.test(name) && name.includes('-')) {
+    return { style: 'kebab-case', description: '短横线命名法' }
+  }
+
+  if (/^[a-z]+(?:_[a-z]+)*$/.test(name) && name.includes('_')) {
+    return { style: 'snake_case', description: '蛇形命名法' }
+  }
+
+  if (/^[A-Z]+(?:_[A-Z]+)*$/.test(name) && name.includes('_')) {
+    return { style: 'CONSTANT_CASE', description: '常量命名法' }
+  }
+
+  if (/^[A-Z][a-zA-Z0-9]*$/.test(name) && /[a-z]/.test(name)) {
+    return { style: 'PascalCase', description: '帕斯卡命名法' }
+  }
+
+  if (/^[a-z][a-zA-Z0-9]*$/.test(name) && /[A-Z]/.test(name)) {
+    return { style: 'camelCase', description: '驼峰命名法' }
+  }
+
+  if (/^[a-z]+$/.test(name)) {
+    return { style: 'lowercase', description: '全小写' }
+  }
+
+  if (/^[A-Z]+$/.test(name)) {
+    return { style: 'UPPERCASE', description: '全大写' }
+  }
+
+  if (name.includes('/')) {
+    const parts = name.split('/')
+    if (parts.length >= 2) {
+      const lastPart = parts[parts.length - 1]
+      if (/^[a-z]+(?:-[a-z]+)*$/.test(lastPart)) {
+        return { style: 'git-branch', description: 'Git 分支命名' }
+      }
+    }
+  }
+
+  return { style: 'unknown', description: '未知命名风格' }
+}
+
+export function splitNameIntoWords(name) {
+  if (!name || typeof name !== 'string') {
+    return []
+  }
+
+  let cleaned = name
+    .replace(/[-_\/]/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .toLowerCase()
+    .trim()
+
+  return cleaned.split(/\s+/).filter(word => word.length > 0)
+}
+
+export function checkGlossaryConflict(words, glossaryTerms) {
+  const conflicts = []
+  const suggestions = []
+
+  if (!words || !glossaryTerms || glossaryTerms.length === 0) {
+    return { conflicts: [], suggestions: [] }
+  }
+
+  const glossaryMap = {}
+  for (const term of glossaryTerms) {
+    glossaryMap[term.english_term.toLowerCase()] = {
+      chinese: term.chinese_term,
+      english: term.english_term,
+      description: term.description
+    }
+  }
+
+  for (const word of words) {
+    const lowerWord = word.toLowerCase()
+    
+    for (const [english, info] of Object.entries(glossaryMap)) {
+      if (lowerWord.includes(english) && lowerWord !== english) {
+        const originalWord = words.find(w => w.toLowerCase() === lowerWord) || word
+        
+        conflicts.push({
+          word: originalWord,
+          expectedEnglish: info.english,
+          chineseTerm: info.chinese,
+          description: info.description || '',
+          message: `单词 "${originalWord}" 可能与术语表冲突`
+        })
+      }
+    }
+  }
+
+  for (const word of words) {
+    const lowerWord = word.toLowerCase()
+    
+    for (const [english, info] of Object.entries(glossaryMap)) {
+      const englishLower = english.toLowerCase()
+      
+      if (lowerWord === englishLower && word !== info.english) {
+        suggestions.push({
+          original: word,
+          suggested: info.english,
+          chineseTerm: info.chinese,
+          description: info.description || '',
+          message: `建议使用术语表中的标准拼写 "${info.english}"`
+        })
+      }
+    }
+  }
+
+  return { conflicts, suggestions }
+}
+
+export function checkNamingConsistency(names) {
+  if (!names || names.length === 0) {
+    return { consistent: true, issues: [], dominantStyle: null }
+  }
+
+  const styleCounts = {}
+  const issues = []
+
+  for (const name of names) {
+    const styleInfo = detectNamingStyle(name)
+    
+    if (!styleCounts[styleInfo.style]) {
+      styleCounts[styleInfo.style] = { count: 0, names: [], description: styleInfo.description }
+    }
+    
+    styleCounts[styleInfo.style].count++
+    styleCounts[styleInfo.style].names.push(name)
+  }
+
+  const styles = Object.entries(styleCounts)
+  if (styles.length === 1) {
+    return { 
+      consistent: true, 
+      issues: [], 
+      dominantStyle: styles[0][0],
+      styleDescription: styles[0][1].description
+    }
+  }
+
+  let dominantStyle = null
+  let maxCount = 0
+  
+  for (const [style, info] of styles) {
+    if (info.count > maxCount) {
+      maxCount = info.count
+      dominantStyle = style
+    }
+  }
+
+  for (const [style, info] of styles) {
+    if (style !== dominantStyle) {
+      issues.push({
+        style: style,
+        description: info.description,
+        count: info.count,
+        names: info.names,
+        suggestedStyle: dominantStyle,
+        suggestedDescription: styleCounts[dominantStyle]?.description || ''
+      })
+    }
+  }
+
+  return {
+    consistent: false,
+    issues,
+    dominantStyle,
+    styleDescription: styleCounts[dominantStyle]?.description || ''
+  }
+}

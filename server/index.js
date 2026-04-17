@@ -27,12 +27,16 @@ import {
   getProjectNamingItems,
   updateProjectNamingItemFinalResults,
   deleteProjectNamingItem,
-  getProjectWithNamingItems
+  getProjectWithNamingItems,
+  detectNamingStyle,
+  splitNameIntoWords,
+  checkGlossaryConflict,
+  checkNamingConsistency
 } from './database.js'
 import { generateNamingWithAI, generateNamingWithAIWithContext } from './qwenService.js'
 
 const app = express()
-const PORT = 3002
+const PORT = 3003
 
 app.use(cors())
 app.use(express.json())
@@ -561,6 +565,322 @@ app.delete('/api/projects/naming-items/:itemId', async (req, res) => {
   } catch (error) {
     console.error('Error deleting naming item:', error)
     res.status(500).json({ error: 'Failed to delete naming item' })
+  }
+})
+
+function convertToStyle(words, targetStyle) {
+  if (!words || words.length === 0) {
+    return ''
+  }
+
+  const lowerWords = words.map(w => w.toLowerCase())
+
+  switch (targetStyle) {
+    case 'kebab-case':
+    case 'git-branch':
+      return lowerWords.join('-')
+    case 'snake_case':
+      return lowerWords.join('_')
+    case 'CONSTANT_CASE':
+      return words.map(w => w.toUpperCase()).join('_')
+    case 'camelCase':
+      return lowerWords.map((w, i) => 
+        i === 0 ? w : w.charAt(0).toUpperCase() + w.slice(1)
+      ).join('')
+    case 'PascalCase':
+      return lowerWords.map(w => 
+        w.charAt(0).toUpperCase() + w.slice(1)
+      ).join('')
+    case 'lowercase':
+      return lowerWords.join('')
+    case 'UPPERCASE':
+      return words.map(w => w.toUpperCase()).join('')
+    default:
+      return lowerWords.join('-')
+  }
+}
+
+function buildCheckSystemPrompt(preferences, glossaryTerms) {
+  let basePrompt = `你是一个专业的代码命名审查助手。用户会提供一组已有的命名（如 repo 名、分支名、字段名等），你需要根据以下规则进行审查：
+
+1. 命名风格一致性检查：检查所有命名是否使用了相同的命名风格（camelCase、snake_case、kebab-case、PascalCase 等）
+2. 术语表一致性检查：检查命名是否符合用户自定义的术语表
+3. 命名偏好检查：检查是否符合用户设置的命名偏好
+4. 提供修改建议：对于不符合规范的命名，给出修改后的建议
+
+请严格按照以下 JSON 格式返回结果，不要添加任何额外内容：
+{
+  "overallAssessment": "整体评估，描述是否通过检查",
+  "styleIssues": [
+    {
+      "originalName": "原始命名",
+      "currentStyle": "当前风格",
+      "suggestedStyle": "建议风格",
+      "suggestedName": "修改后的命名",
+      "reason": "原因说明"
+    }
+  ],
+  "glossaryIssues": [
+    {
+      "originalName": "原始命名",
+      "word": "问题单词",
+      "expectedWord": "期望单词",
+      "chineseTerm": "中文术语",
+      "suggestedName": "修改后的命名",
+      "reason": "原因说明"
+    }
+  ],
+  "preferenceIssues": [
+    {
+      "originalName": "原始命名",
+      "issue": "问题描述",
+      "suggestion": "修改建议",
+      "suggestedName": "修改后的命名"
+    }
+  ],
+  "suggestedNames": [
+    {
+      "original": "原始命名",
+      "suggested": "建议命名",
+      "reasons": ["修改原因列表"]
+    }
+  ]
+}
+
+请确保：
+- 只返回有效的 JSON 格式
+- 所有字段都有值，如果没有问题则返回空数组
+- 建议要具体、可操作`;
+
+  if (preferences && preferences.length > 0) {
+    basePrompt += `
+
+用户偏好设置：`;
+    for (const pref of preferences) {
+      basePrompt += `
+- ${pref.preference_key}: ${pref.preference_value} (${pref.description || ''})`;
+    }
+  }
+
+  if (glossaryTerms && glossaryTerms.length > 0) {
+    basePrompt += `
+
+用户自定义术语表（请优先检查命名是否符合这些术语）：`;
+    const sortedTerms = [...glossaryTerms].sort((a, b) => b.priority - a.priority);
+    for (const term of sortedTerms) {
+      basePrompt += `
+- ${term.chinese_term}: ${term.english_term}${term.description ? ` (${term.description})` : ''}`;
+    }
+  }
+
+  return basePrompt;
+}
+
+async function checkNamingWithAI(names, preferences, glossaryTerms) {
+  const apiKey = process.env.DASHSCOPE_API_KEY;
+  const model = process.env.QWEN_MODEL || 'qwen3.5-flash';
+  const baseUrl = process.env.DASHSCOPE_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
+
+  if (!apiKey) {
+    return null;
+  }
+
+  const systemPrompt = buildCheckSystemPrompt(preferences, glossaryTerms);
+  
+  const userMessage = `请审查以下命名：
+
+${names.map((n, i) => `${i + 1}. ${n}`).join('\n')}
+
+请按照要求返回 JSON 格式的审查结果。`;
+
+  try {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: [
+          {
+            role: 'system',
+            content: systemPrompt
+          },
+          {
+            role: 'user',
+            content: userMessage
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 2000
+      })
+    });
+
+    if (!response.ok) {
+      console.error('AI 服务调用失败:', response.status);
+      return null;
+    }
+
+    const data = await response.json();
+    
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      return null;
+    }
+
+    const content = data.choices[0].message.content;
+    
+    try {
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+      }
+      return JSON.parse(content);
+    } catch (parseError) {
+      console.error('解析 AI 响应失败:', content);
+      return null;
+    }
+  } catch (error) {
+    console.error('AI 命名检查失败:', error);
+    return null;
+  }
+}
+
+app.post('/api/check-naming', async (req, res) => {
+  try {
+    const { names, projectId } = req.body;
+    
+    if (!names || !Array.isArray(names) || names.length === 0) {
+      return res.status(400).json({ error: 'names array is required' })
+    }
+
+    const preferences = getAllPreferences()
+    const glossaryTerms = getAllGlossaryTerms({ limit: 1000 })
+
+    const results = {
+      basicChecks: {
+        styleAnalysis: {},
+        glossaryAnalysis: {},
+        consistencyCheck: null
+      },
+      aiAnalysis: null,
+      suggestedNames: []
+    }
+
+    const styleAnalysis = {}
+    for (const name of names) {
+      const styleInfo = detectNamingStyle(name)
+      const words = splitNameIntoWords(name)
+      const glossaryCheck = checkGlossaryConflict(words, glossaryTerms)
+      
+      styleAnalysis[name] = {
+        style: styleInfo.style,
+        description: styleInfo.description,
+        words: words,
+        glossaryConflicts: glossaryCheck.conflicts,
+        glossarySuggestions: glossaryCheck.suggestions
+      }
+    }
+    results.basicChecks.styleAnalysis = styleAnalysis
+
+    const allWords = []
+    const glossaryAnalysis = {
+      conflicts: [],
+      suggestions: []
+    }
+    
+    for (const name of names) {
+      const words = splitNameIntoWords(name)
+      const check = checkGlossaryConflict(words, glossaryTerms)
+      
+      for (const conflict of check.conflicts) {
+        glossaryAnalysis.conflicts.push({
+          name: name,
+          ...conflict
+        })
+      }
+      
+      for (const suggestion of check.suggestions) {
+        glossaryAnalysis.suggestions.push({
+          name: name,
+          ...suggestion
+        })
+      }
+      
+      allWords.push(...words)
+    }
+    results.basicChecks.glossaryAnalysis = glossaryAnalysis
+
+    results.basicChecks.consistencyCheck = checkNamingConsistency(names)
+
+    const suggestedNames = []
+    const dominantStyle = results.basicChecks.consistencyCheck.dominantStyle
+    
+    for (const name of names) {
+      const styleInfo = styleAnalysis[name]
+      const suggestions = []
+      let suggestedName = name
+      
+      if (!results.basicChecks.consistencyCheck.consistent && 
+          styleInfo.style !== dominantStyle && 
+          dominantStyle && 
+          styleInfo.words.length > 0) {
+        suggestedName = convertToStyle(styleInfo.words, dominantStyle)
+        suggestions.push(`命名风格不一致，建议统一为 ${results.basicChecks.consistencyCheck.styleDescription}`)
+      }
+      
+      const glossarySuggestions = glossaryAnalysis.suggestions.filter(s => s.name === name)
+      if (glossarySuggestions.length > 0) {
+        for (const gs of glossarySuggestions) {
+          if (styleInfo.words.length > 0) {
+            const updatedWords = styleInfo.words.map(w => 
+              w.toLowerCase() === gs.original.toLowerCase() ? gs.suggested : w
+            )
+            suggestedName = convertToStyle(updatedWords, dominantStyle || styleInfo.style)
+            suggestions.push(`术语 "${gs.original}" 建议替换为术语表中的 "${gs.suggested}"（中文：${gs.chineseTerm}）`)
+          }
+        }
+      }
+      
+      if (suggestions.length > 0 || suggestedName !== name) {
+        suggestedNames.push({
+          original: name,
+          suggested: suggestedName,
+          reasons: suggestions.length > 0 ? suggestions : ['与其他命名风格保持一致']
+        })
+      }
+    }
+    results.suggestedNames = suggestedNames
+
+    try {
+      const aiResult = await checkNamingWithAI(names, preferences, glossaryTerms)
+      if (aiResult) {
+        results.aiAnalysis = aiResult
+        
+        if (aiResult.suggestedNames && aiResult.suggestedNames.length > 0) {
+          for (const aiSuggestion of aiResult.suggestedNames) {
+            const existing = results.suggestedNames.find(s => s.original === aiSuggestion.original)
+            if (!existing && aiSuggestion.suggested !== aiSuggestion.original) {
+              results.suggestedNames.push({
+                original: aiSuggestion.original,
+                suggested: aiSuggestion.suggested,
+                reasons: aiSuggestion.reasons || ['AI 建议优化']
+              })
+            }
+          }
+        }
+      }
+    } catch (aiError) {
+      console.error('AI 分析失败，使用基础检查结果:', aiError)
+    }
+
+    res.json({
+      success: true,
+      results
+    })
+  } catch (error) {
+    console.error('Error checking naming:', error)
+    res.status(500).json({ error: error.message || 'Failed to check naming' })
   }
 })
 
