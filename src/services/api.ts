@@ -38,7 +38,7 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
 }
 
 export async function saveHistory(originalInput: string, results: NamingResults): Promise<{ success: boolean; id: number }> {
-  return request('/api/history', {
+  return request('/history', {
     method: 'POST',
     body: JSON.stringify({ originalInput, results }),
   })
@@ -66,21 +66,21 @@ export async function getHistory(options?: {
   }
 
   const queryString = params.toString()
-  return request(`/api/history${queryString ? `?${queryString}` : ''}`)
+  return request(`/history${queryString ? `?${queryString}` : ''}`)
 }
 
 export async function getHistoryById(id: number): Promise<HistoryItem> {
-  return request(`/api/history/${id}`)
+  return request(`/history/${id}`)
 }
 
 export async function toggleFavorite(id: number): Promise<{ success: boolean; isFavorite: boolean }> {
-  return request(`/api/history/${id}/favorite`, {
+  return request(`/history/${id}/favorite`, {
     method: 'PUT',
   })
 }
 
 export async function deleteHistory(id: number): Promise<{ success: boolean }> {
-  return request(`/api/history/${id}`, {
+  return request(`/history/${id}`, {
     method: 'DELETE',
   })
 }
