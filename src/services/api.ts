@@ -451,7 +451,7 @@ export interface NamingCheckResponse {
 }
 
 export async function checkNaming(names: string[], projectId?: number): Promise<NamingCheckResult> {
-  const response = await request<NamingCheckResponse>('/api/check-naming', {
+  const response = await request<NamingCheckResponse>('/check-naming', {
     method: 'POST',
     body: JSON.stringify({ names, projectId }),
   })
