@@ -144,20 +144,6 @@ function App() {
     }
   }, [])
 
-  useEffect(() => {
-    if (viewMode === 'history' || viewMode === 'favorites') {
-      loadHistory(viewMode === 'favorites' ? 'favorites' : 'all', searchKeyword)
-    } else if (viewMode === 'settings') {
-      if (settingsTab === 'preferences') {
-        loadPreferences()
-      } else {
-        loadGlossaryTerms(glossarySearchKeyword)
-      }
-    } else if (viewMode === 'projects') {
-      loadProjects(projectSearchKeyword)
-    }
-  }, [viewMode, loadHistory, searchKeyword, settingsTab, loadPreferences, loadGlossaryTerms, glossarySearchKeyword, loadProjects, projectSearchKeyword])
-
   const convertResultsToNamingResult = (results: NamingResults): NamingResult[] => {
     return [
       {
@@ -559,6 +545,20 @@ function App() {
       loadProjects(projectSearchKeyword)
     }
   }, [loadProjects, projectSearchKeyword])
+
+  useEffect(() => {
+    if (viewMode === 'history' || viewMode === 'favorites') {
+      loadHistory(viewMode === 'favorites' ? 'favorites' : 'all', searchKeyword)
+    } else if (viewMode === 'settings') {
+      if (settingsTab === 'preferences') {
+        loadPreferences()
+      } else {
+        loadGlossaryTerms(glossarySearchKeyword)
+      }
+    } else if (viewMode === 'projects') {
+      loadProjects(projectSearchKeyword)
+    }
+  }, [viewMode, loadHistory, searchKeyword, settingsTab, loadPreferences, loadGlossaryTerms, glossarySearchKeyword, loadProjects, projectSearchKeyword])
 
   const isCopied = (itemId: string, type: NamingType | 'all') => {
     return copiedState?.itemId === itemId && copiedState?.type === type

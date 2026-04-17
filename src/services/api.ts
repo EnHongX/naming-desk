@@ -227,13 +227,6 @@ export async function deleteGlossaryTerm(id: number): Promise<{ success: boolean
   })
 }
 
-export interface NamingResults {
-  githubRepo: string
-  camelCase: string
-  snakeCase: string
-  gitBranch: string
-}
-
 export interface Project {
   id: number
   name: string
