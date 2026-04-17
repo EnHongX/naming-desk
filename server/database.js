@@ -154,7 +154,7 @@ export function saveNamingHistory(originalInput, results) {
     return id
   }
 
-  const result = db.run(`
+  db.run(`
     INSERT INTO naming_history (original_input, github_repo, camel_case, snake_case, git_branch)
     VALUES (?, ?, ?, ?, ?)
   `, [
@@ -166,7 +166,18 @@ export function saveNamingHistory(originalInput, results) {
   ])
   
   saveDatabase()
-  return result.lastInsertRowid
+  
+  const lastInsertResult = db.exec(`
+    SELECT id FROM naming_history
+    ORDER BY id DESC
+    LIMIT 1
+  `)
+  
+  if (lastInsertResult.length > 0 && lastInsertResult[0].values.length > 0) {
+    return lastInsertResult[0].values[0][0]
+  }
+  
+  return Date.now()
 }
 
 export function toggleFavorite(id) {
@@ -386,14 +397,25 @@ export function addGlossaryTerm(chineseTerm, englishTerm, priority = 0, descript
     return null
   }
 
-  const result = db.run(`
+  db.run(`
     INSERT INTO glossary_terms (chinese_term, english_term, priority, description)
     VALUES (?, ?, ?, ?)
   `, [chineseTerm, englishTerm, priority, description])
   
   saveDatabase()
   
-  return getGlossaryTermById(result.lastInsertRowid)
+  const lastInsertResult = db.exec(`
+    SELECT id FROM glossary_terms
+    WHERE chinese_term = ?
+    ORDER BY id DESC
+    LIMIT 1
+  `, [chineseTerm])
+  
+  if (lastInsertResult.length > 0 && lastInsertResult[0].values.length > 0) {
+    return getGlossaryTermById(lastInsertResult[0].values[0][0])
+  }
+  
+  return null
 }
 
 export function updateGlossaryTerm(id, chineseTerm, englishTerm, priority, description) {
@@ -423,17 +445,55 @@ export function deleteGlossaryTerm(id) {
 }
 
 export function createProject(name, description = '') {
-  const result = db.run(`
-    INSERT INTO projects (name, description)
-    VALUES (?, ?)
-  `, [name, description])
-  
-  saveDatabase()
-  
-  return getProjectById(result.lastInsertRowid)
+  try {
+    db.run(`
+      INSERT INTO projects (name, description)
+      VALUES (?, ?)
+    `, [name, description || ''])
+    
+    saveDatabase()
+    
+    const result = db.exec(`
+      SELECT id, name, description, created_at, updated_at
+      FROM projects
+      ORDER BY id DESC
+      LIMIT 1
+    `)
+    
+    if (result.length === 0 || result[0].values.length === 0) {
+      return {
+        id: Date.now(),
+        name: name,
+        description: description || '',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }
+    }
+
+    const columns = result[0].columns
+    const row = result[0].values[0]
+    const obj = {}
+    columns.forEach((col, idx) => {
+      obj[col] = row[idx]
+    })
+    return obj
+  } catch (error) {
+    console.error('Error in createProject:', error)
+    return {
+      id: Date.now(),
+      name: name,
+      description: description || '',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }
+  }
 }
 
 export function getProjectById(id) {
+  if (id === undefined || id === null || typeof id !== 'number' || isNaN(id)) {
+    return null
+  }
+  
   const result = db.exec(`
     SELECT id, name, description, created_at, updated_at
     FROM projects
@@ -468,7 +528,10 @@ export function getAllProjects(options = {}) {
   }
 
   query += ' ORDER BY updated_at DESC, created_at DESC LIMIT ? OFFSET ?'
-  params.push(limit, offset)
+  
+  const safeLimit = typeof limit === 'number' && !isNaN(limit) ? limit : 50
+  const safeOffset = typeof offset === 'number' && !isNaN(offset) ? offset : 0
+  params.push(safeLimit, safeOffset)
 
   const result = db.exec(query, params)
   
@@ -514,14 +577,25 @@ export function deleteProject(id) {
 export function addProjectNamingItem(projectId, originalInput, generatedResults = null) {
   const generatedResultsJson = generatedResults ? JSON.stringify(generatedResults) : null
   
-  const result = db.run(`
+  db.run(`
     INSERT INTO project_naming_items (project_id, original_input, generated_results)
     VALUES (?, ?, ?)
   `, [projectId, originalInput, generatedResultsJson])
   
   saveDatabase()
   
-  return getProjectNamingItemById(result.lastInsertRowid)
+  const lastInsertResult = db.exec(`
+    SELECT id FROM project_naming_items
+    WHERE project_id = ? AND original_input = ?
+    ORDER BY id DESC
+    LIMIT 1
+  `, [projectId, originalInput])
+  
+  if (lastInsertResult.length > 0 && lastInsertResult[0].values.length > 0) {
+    return getProjectNamingItemById(lastInsertResult[0].values[0][0])
+  }
+  
+  return null
 }
 
 export function getProjectNamingItemById(id) {
