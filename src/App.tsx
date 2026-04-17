@@ -27,13 +27,18 @@ import {
   deleteProject,
   generateProjectNamingItems,
   updateProjectNamingItemFinalResults,
-  deleteProjectNamingItem
+  deleteProjectNamingItem,
+  checkNaming,
+  NamingCheckResult,
+  SuggestedName
 } from './services/api'
 import './App.css'
 
 type ViewMode = 'generator' | 'history' | 'favorites' | 'settings' | 'projects' | 'projectDetail'
 
 type SettingsTab = 'preferences' | 'glossary'
+
+type ProjectDetailTab = 'namingItems' | 'namingCheck'
 
 interface NamingResult {
   type: NamingType
@@ -90,6 +95,12 @@ function App() {
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [projectItemInput, setProjectItemInput] = useState('')
   const [projectItemGenerating, setProjectItemGenerating] = useState(false)
+
+  const [projectDetailTab, setProjectDetailTab] = useState<ProjectDetailTab>('namingItems')
+  const [namingCheckInput, setNamingCheckInput] = useState('')
+  const [namingCheckResult, setNamingCheckResult] = useState<NamingCheckResult | null>(null)
+  const [namingCheckLoading, setNamingCheckLoading] = useState(false)
+  const [selectedSuggestion, setSelectedSuggestion] = useState<Record<string, string>>({})
 
   const loadHistory = useCallback(async (mode: 'all' | 'favorites' = 'all', keyword?: string) => {
     try {
@@ -545,6 +556,67 @@ function App() {
       loadProjects(projectSearchKeyword)
     }
   }, [loadProjects, projectSearchKeyword])
+
+  const handleNamingCheck = useCallback(async () => {
+    const lines = namingCheckInput.split('\n').filter(line => line.trim())
+    
+    if (lines.length === 0) {
+      setNamingCheckResult(null)
+      return
+    }
+
+    try {
+      setNamingCheckLoading(true)
+      setError(null)
+      
+      const result = await checkNaming(lines, currentProject?.id)
+      setNamingCheckResult(result)
+      
+      const initialSelection: Record<string, string> = {}
+      for (const suggestion of result.suggestedNames) {
+        initialSelection[suggestion.original] = suggestion.suggested
+      }
+      setSelectedSuggestion(initialSelection)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '命名体检失败')
+      console.error('Naming check error:', err)
+    } finally {
+      setNamingCheckLoading(false)
+    }
+  }, [namingCheckInput, currentProject])
+
+  const handleApplyAllSuggestions = useCallback(() => {
+    if (!namingCheckResult) return
+    
+    const lines = namingCheckInput.split('\n')
+    const newLines = lines.map(line => {
+      const trimmed = line.trim()
+      if (selectedSuggestion[trimmed]) {
+        return selectedSuggestion[trimmed]
+      }
+      return line
+    })
+    
+    setNamingCheckInput(newLines.join('\n'))
+  }, [namingCheckInput, namingCheckResult, selectedSuggestion])
+
+  const handleCopySuggestedNames = useCallback(() => {
+    if (!namingCheckResult) return
+    
+    const lines = namingCheckInput.split('\n')
+    const resultLines = lines.map(line => {
+      const trimmed = line.trim()
+      if (selectedSuggestion[trimmed]) {
+        return selectedSuggestion[trimmed]
+      }
+      return line
+    })
+    
+    const text = resultLines.join('\n')
+    navigator.clipboard.writeText(text).catch(err => {
+      console.error('复制失败:', err)
+    })
+  }, [namingCheckInput, namingCheckResult, selectedSuggestion])
 
   useEffect(() => {
     if (viewMode === 'history' || viewMode === 'favorites') {
@@ -1365,26 +1437,20 @@ function App() {
               </div>
             </section>
 
-            <section className="input-section">
-              <label className="input-label">添加命名项（每行一条）</label>
-              <textarea
-                className="input-textarea"
-                placeholder="例如：&#10;用户订单列表&#10;新增商品详情页面&#10;修复登录验证bug..."
-                value={projectItemInput}
-                onChange={(e) => setProjectItemInput(e.target.value)}
-                rows={4}
-              />
-              <div className="input-hint">
-                <span>提示：每行输入一条描述，点击按钮生成命名</span>
-              </div>
-              <button 
-                className="generate-btn" 
-                onClick={handleGenerateProjectNamingItems} 
-                disabled={!projectItemInput.trim() || projectItemGenerating}
+            <nav className="settings-nav project-detail-nav">
+              <button
+                className={`settings-tab ${projectDetailTab === 'namingItems' ? 'active' : ''}`}
+                onClick={() => setProjectDetailTab('namingItems')}
               >
-                {projectItemGenerating ? '生成中...' : '生成命名'}
+                命名项管理
               </button>
-            </section>
+              <button
+                className={`settings-tab ${projectDetailTab === 'namingCheck' ? 'active' : ''}`}
+                onClick={() => setProjectDetailTab('namingCheck')}
+              >
+                命名体检
+              </button>
+            </nav>
 
             {error && (
               <div className="error-message">
@@ -1392,132 +1458,385 @@ function App() {
               </div>
             )}
 
-            {currentProject.namingItems.length === 0 ? (
-              <section className="empty-section">
-                <p className="empty-text">
-                  暂无命名项，输入描述后点击"生成命名"开始
-                </p>
-              </section>
-            ) : (
-              <section className="results-section">
-                <div className="results-header">
-                  <h2 className="results-title">命名项（共 {currentProject.namingItems.length} 条）</h2>
-                </div>
-                
-                <div className="batch-results-list">
-                  {currentProject.namingItems.map((item, itemIndex) => {
-                    const results = item.final_results || item.generated_results
-                    const hasFinalResults = !!item.final_results
+            {projectDetailTab === 'namingItems' && (
+              <>
+                <section className="input-section">
+                  <label className="input-label">添加命名项（每行一条）</label>
+                  <textarea
+                    className="input-textarea"
+                    placeholder="例如：&#10;用户订单列表&#10;新增商品详情页面&#10;修复登录验证bug..."
+                    value={projectItemInput}
+                    onChange={(e) => setProjectItemInput(e.target.value)}
+                    rows={4}
+                  />
+                  <div className="input-hint">
+                    <span>提示：每行输入一条描述，点击按钮生成命名</span>
+                  </div>
+                  <button 
+                    className="generate-btn" 
+                    onClick={handleGenerateProjectNamingItems} 
+                    disabled={!projectItemInput.trim() || projectItemGenerating}
+                  >
+                    {projectItemGenerating ? '生成中...' : '生成命名'}
+                  </button>
+                </section>
+
+                {currentProject.namingItems.length === 0 ? (
+                  <section className="empty-section">
+                    <p className="empty-text">
+                      暂无命名项，输入描述后点击"生成命名"开始
+                    </p>
+                  </section>
+                ) : (
+                  <section className="results-section">
+                    <div className="results-header">
+                      <h2 className="results-title">命名项（共 {currentProject.namingItems.length} 条）</h2>
+                    </div>
                     
-                    return (
-                      <div key={item.id} className={`batch-item ${hasFinalResults ? 'finalized' : ''}`}>
-                        <div className="batch-item-header">
-                          <span className="batch-item-number">#{itemIndex + 1}</span>
-                          <span className="batch-item-original">{item.original_input}</span>
-                          {hasFinalResults && (
-                            <span className="final-badge">已确认</span>
-                          )}
-                          <span className="batch-item-date">{formatDate(item.created_at)}</span>
-                          <button
-                            className="delete-term-btn"
-                            onClick={() => {
-                              if (confirm('确定要删除这个命名项吗？')) {
-                                handleDeleteProjectNamingItem(item.id)
-                              }
-                            }}
-                            title="删除"
-                          >
-                            删除
-                          </button>
-                        </div>
+                    <div className="batch-results-list">
+                      {currentProject.namingItems.map((item, itemIndex) => {
+                        const results = item.final_results || item.generated_results
+                        const hasFinalResults = !!item.final_results
                         
-                        {results && (
-                          <>
-                            <div className="batch-item-results">
-                              <div className="result-card">
-                                <div className="result-header">
-                                  <span className="result-label">GitHub 仓库名</span>
-                                  <button
-                                    className={`copy-btn ${isCopied(`project-${item.id}`, NamingType.GITHUB_REPO) ? 'copied' : ''}`}
-                                    onClick={() => handleCopy(results.githubRepo, `project-${item.id}`, NamingType.GITHUB_REPO)}
-                                    disabled={!results.githubRepo}
-                                  >
-                                    {isCopied(`project-${item.id}`, NamingType.GITHUB_REPO) ? '已复制' : '复制'}
-                                  </button>
-                                </div>
-                                <div className="result-value">
-                                  {results.githubRepo || <span className="placeholder">无有效命名</span>}
-                                </div>
-                              </div>
-                              
-                              <div className="result-card">
-                                <div className="result-header">
-                                  <span className="result-label">camelCase 字段名</span>
-                                  <button
-                                    className={`copy-btn ${isCopied(`project-${item.id}`, NamingType.CAMEL_CASE) ? 'copied' : ''}`}
-                                    onClick={() => handleCopy(results.camelCase, `project-${item.id}`, NamingType.CAMEL_CASE)}
-                                    disabled={!results.camelCase}
-                                  >
-                                    {isCopied(`project-${item.id}`, NamingType.CAMEL_CASE) ? '已复制' : '复制'}
-                                  </button>
-                                </div>
-                                <div className="result-value">
-                                  {results.camelCase || <span className="placeholder">无有效命名</span>}
-                                </div>
-                              </div>
-                              
-                              <div className="result-card">
-                                <div className="result-header">
-                                  <span className="result-label">snake_case 字段名</span>
-                                  <button
-                                    className={`copy-btn ${isCopied(`project-${item.id}`, NamingType.SNAKE_CASE) ? 'copied' : ''}`}
-                                    onClick={() => handleCopy(results.snakeCase, `project-${item.id}`, NamingType.SNAKE_CASE)}
-                                    disabled={!results.snakeCase}
-                                  >
-                                    {isCopied(`project-${item.id}`, NamingType.SNAKE_CASE) ? '已复制' : '复制'}
-                                  </button>
-                                </div>
-                                <div className="result-value">
-                                  {results.snakeCase || <span className="placeholder">无有效命名</span>}
-                                </div>
-                              </div>
-                              
-                              <div className="result-card">
-                                <div className="result-header">
-                                  <span className="result-label">Git 分支名</span>
-                                  <button
-                                    className={`copy-btn ${isCopied(`project-${item.id}`, NamingType.GIT_BRANCH) ? 'copied' : ''}`}
-                                    onClick={() => handleCopy(results.gitBranch, `project-${item.id}`, NamingType.GIT_BRANCH)}
-                                    disabled={!results.gitBranch}
-                                  >
-                                    {isCopied(`project-${item.id}`, NamingType.GIT_BRANCH) ? '已复制' : '复制'}
-                                  </button>
-                                </div>
-                                <div className="result-value">
-                                  {results.gitBranch || <span className="placeholder">无有效命名</span>}
-                                </div>
-                              </div>
+                        return (
+                          <div key={item.id} className={`batch-item ${hasFinalResults ? 'finalized' : ''}`}>
+                            <div className="batch-item-header">
+                              <span className="batch-item-number">#{itemIndex + 1}</span>
+                              <span className="batch-item-original">{item.original_input}</span>
+                              {hasFinalResults && (
+                                <span className="final-badge">已确认</span>
+                              )}
+                              <span className="batch-item-date">{formatDate(item.created_at)}</span>
+                              <button
+                                className="delete-term-btn"
+                                onClick={() => {
+                                  if (confirm('确定要删除这个命名项吗？')) {
+                                    handleDeleteProjectNamingItem(item.id)
+                                  }
+                                }}
+                                title="删除"
+                              >
+                                删除
+                              </button>
                             </div>
                             
-                            {!hasFinalResults && item.generated_results && (
-                              <div className="save-final-section">
-                                <button
-                                  className="save-final-btn"
-                                  onClick={() => {
-                                    handleSaveFinalResults(item.id, item.generated_results!)
-                                  }}
-                                >
-                                  ✓ 确认此方案为最终命名
-                                </button>
-                              </div>
+                            {results && (
+                              <>
+                                <div className="batch-item-results">
+                                  <div className="result-card">
+                                    <div className="result-header">
+                                      <span className="result-label">GitHub 仓库名</span>
+                                      <button
+                                        className={`copy-btn ${isCopied(`project-${item.id}`, NamingType.GITHUB_REPO) ? 'copied' : ''}`}
+                                        onClick={() => handleCopy(results.githubRepo, `project-${item.id}`, NamingType.GITHUB_REPO)}
+                                        disabled={!results.githubRepo}
+                                      >
+                                        {isCopied(`project-${item.id}`, NamingType.GITHUB_REPO) ? '已复制' : '复制'}
+                                      </button>
+                                    </div>
+                                    <div className="result-value">
+                                      {results.githubRepo || <span className="placeholder">无有效命名</span>}
+                                    </div>
+                                  </div>
+                                  
+                                  <div className="result-card">
+                                    <div className="result-header">
+                                      <span className="result-label">camelCase 字段名</span>
+                                      <button
+                                        className={`copy-btn ${isCopied(`project-${item.id}`, NamingType.CAMEL_CASE) ? 'copied' : ''}`}
+                                        onClick={() => handleCopy(results.camelCase, `project-${item.id}`, NamingType.CAMEL_CASE)}
+                                        disabled={!results.camelCase}
+                                      >
+                                        {isCopied(`project-${item.id}`, NamingType.CAMEL_CASE) ? '已复制' : '复制'}
+                                      </button>
+                                    </div>
+                                    <div className="result-value">
+                                      {results.camelCase || <span className="placeholder">无有效命名</span>}
+                                    </div>
+                                  </div>
+                                  
+                                  <div className="result-card">
+                                    <div className="result-header">
+                                      <span className="result-label">snake_case 字段名</span>
+                                      <button
+                                        className={`copy-btn ${isCopied(`project-${item.id}`, NamingType.SNAKE_CASE) ? 'copied' : ''}`}
+                                        onClick={() => handleCopy(results.snakeCase, `project-${item.id}`, NamingType.SNAKE_CASE)}
+                                        disabled={!results.snakeCase}
+                                      >
+                                        {isCopied(`project-${item.id}`, NamingType.SNAKE_CASE) ? '已复制' : '复制'}
+                                      </button>
+                                    </div>
+                                    <div className="result-value">
+                                      {results.snakeCase || <span className="placeholder">无有效命名</span>}
+                                    </div>
+                                  </div>
+                                  
+                                  <div className="result-card">
+                                    <div className="result-header">
+                                      <span className="result-label">Git 分支名</span>
+                                      <button
+                                        className={`copy-btn ${isCopied(`project-${item.id}`, NamingType.GIT_BRANCH) ? 'copied' : ''}`}
+                                        onClick={() => handleCopy(results.gitBranch, `project-${item.id}`, NamingType.GIT_BRANCH)}
+                                        disabled={!results.gitBranch}
+                                      >
+                                        {isCopied(`project-${item.id}`, NamingType.GIT_BRANCH) ? '已复制' : '复制'}
+                                      </button>
+                                    </div>
+                                    <div className="result-value">
+                                      {results.gitBranch || <span className="placeholder">无有效命名</span>}
+                                    </div>
+                                  </div>
+                                </div>
+                                
+                                {!hasFinalResults && item.generated_results && (
+                                  <div className="save-final-section">
+                                    <button
+                                      className="save-final-btn"
+                                      onClick={() => {
+                                        handleSaveFinalResults(item.id, item.generated_results!)
+                                      }}
+                                    >
+                                      ✓ 确认此方案为最终命名
+                                    </button>
+                                  </div>
+                                )}
+                              </>
                             )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </section>
+                )}
+              </>
+            )}
+
+            {projectDetailTab === 'namingCheck' && (
+              <>
+                <section className="input-section">
+                  <label className="input-label">粘贴需要检查的命名（每行一条）</label>
+                  <textarea
+                    className="input-textarea"
+                    placeholder="例如：&#10;userManagementSystem&#10;user_management_system&#10;feature/add-user-page&#10;my-demo-repo"
+                    value={namingCheckInput}
+                    onChange={(e) => setNamingCheckInput(e.target.value)}
+                    rows={6}
+                  />
+                  <div className="input-hint">
+                    <span>提示：每行输入一个已有的命名（如 repo 名、分支名、字段名等），点击按钮进行体检</span>
+                  </div>
+                  <button 
+                    className="generate-btn" 
+                    onClick={handleNamingCheck} 
+                    disabled={!namingCheckInput.trim() || namingCheckLoading}
+                  >
+                    {namingCheckLoading ? '检查中...' : '开始命名体检'}
+                  </button>
+                </section>
+
+                {namingCheckResult && (
+                  <>
+                    <section className="results-section">
+                      <div className="results-header">
+                        <h2 className="results-title">体检结果</h2>
+                        {namingCheckResult.suggestedNames.length > 0 && (
+                          <>
+                            <button
+                              className="copy-all-btn"
+                              onClick={handleApplyAllSuggestions}
+                              style={{ marginLeft: 'auto', marginRight: '10px' }}
+                            >
+                              应用所有建议
+                            </button>
+                            <button
+                              className="copy-all-btn"
+                              onClick={handleCopySuggestedNames}
+                            >
+                              复制修改后内容
+                            </button>
                           </>
                         )}
                       </div>
-                    )
-                  })}
-                </div>
-              </section>
+
+                      <div className="check-summary">
+                        <div className="summary-item">
+                          <span className="summary-label">命名风格一致性：</span>
+                          <span className={`summary-value ${namingCheckResult.basicChecks.consistencyCheck.consistent ? 'pass' : 'fail'}`}>
+                            {namingCheckResult.basicChecks.consistencyCheck.consistent 
+                              ? '✓ 一致' 
+                              : `✗ 不一致（建议统一为 ${namingCheckResult.basicChecks.consistencyCheck.styleDescription}）`}
+                          </span>
+                        </div>
+                        <div className="summary-item">
+                          <span className="summary-label">术语表冲突：</span>
+                          <span className={`summary-value ${namingCheckResult.basicChecks.glossaryAnalysis.conflicts.length === 0 ? 'pass' : 'fail'}`}>
+                            {namingCheckResult.basicChecks.glossaryAnalysis.conflicts.length === 0 
+                              ? '✓ 无冲突' 
+                              : `✗ 发现 ${namingCheckResult.basicChecks.glossaryAnalysis.conflicts.length} 个冲突`}
+                          </span>
+                        </div>
+                        <div className="summary-item">
+                          <span className="summary-label">建议修改项：</span>
+                          <span className={`summary-value ${namingCheckResult.suggestedNames.length === 0 ? 'pass' : 'warning'}`}>
+                            {namingCheckResult.suggestedNames.length === 0 
+                              ? '✓ 无需修改' 
+                              : `⚠ ${namingCheckResult.suggestedNames.length} 项建议修改`}
+                          </span>
+                        </div>
+                      </div>
+
+                      {namingCheckResult.aiAnalysis && (
+                        <div className="ai-analysis-section">
+                          <h3 className="section-subtitle">AI 智能分析</h3>
+                          <div className="ai-assessment">
+                            <p>{namingCheckResult.aiAnalysis.overallAssessment}</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {namingCheckResult.basicChecks.consistencyCheck.issues.length > 0 && (
+                        <div className="style-issues-section">
+                          <h3 className="section-subtitle">风格不一致问题</h3>
+                          <div className="issues-list">
+                            {namingCheckResult.basicChecks.consistencyCheck.issues.map((issue, idx) => (
+                              <div key={idx} className="issue-item">
+                                <div className="issue-header">
+                                  <span className="issue-type warning">风格不一致</span>
+                                  <span className="issue-count">{issue.count} 个命名</span>
+                                </div>
+                                <div className="issue-details">
+                                  <p>当前风格：<strong>{issue.description}</strong></p>
+                                  <p>建议统一为：<strong>{issue.suggestedDescription}</strong></p>
+                                  <p className="issue-names">涉及命名：{issue.names.join('、')}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {namingCheckResult.basicChecks.glossaryAnalysis.conflicts.length > 0 && (
+                        <div className="glossary-issues-section">
+                          <h3 className="section-subtitle">术语表冲突</h3>
+                          <div className="issues-list">
+                            {namingCheckResult.basicChecks.glossaryAnalysis.conflicts.map((conflict, idx) => (
+                              <div key={idx} className="issue-item">
+                                <div className="issue-header">
+                                  <span className="issue-type error">术语冲突</span>
+                                </div>
+                                <div className="issue-details">
+                                  <p>命名：<strong>{conflict.name}</strong></p>
+                                  <p>问题单词：<strong>{conflict.word}</strong></p>
+                                  <p>期望术语：<strong>{conflict.expectedEnglish}</strong>（中文：{conflict.chineseTerm}）</p>
+                                  {conflict.description && <p className="issue-desc">说明：{conflict.description}</p>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {namingCheckResult.basicChecks.glossaryAnalysis.suggestions.length > 0 && (
+                        <div className="glossary-suggestions-section">
+                          <h3 className="section-subtitle">术语拼写建议</h3>
+                          <div className="issues-list">
+                            {namingCheckResult.basicChecks.glossaryAnalysis.suggestions.map((suggestion, idx) => (
+                              <div key={idx} className="issue-item suggestion">
+                                <div className="issue-header">
+                                  <span className="issue-type info">拼写建议</span>
+                                </div>
+                                <div className="issue-details">
+                                  <p>命名：<strong>{suggestion.name}</strong></p>
+                                  <p>当前拼写：<strong>{suggestion.original}</strong></p>
+                                  <p>建议拼写：<strong>{suggestion.suggested}</strong>（中文：{suggestion.chineseTerm}）</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {namingCheckResult.suggestedNames.length > 0 && (
+                        <div className="suggestions-section">
+                          <h3 className="section-subtitle">修改建议</h3>
+                          <div className="suggestions-list">
+                            {namingCheckResult.suggestedNames.map((suggestion, idx) => (
+                              <div key={idx} className="suggestion-item">
+                                <div className="suggestion-original">
+                                  <span className="suggestion-label">原命名：</span>
+                                  <span className="suggestion-value original">{suggestion.original}</span>
+                                </div>
+                                <div className="suggestion-arrow">↓</div>
+                                <div className="suggestion-new">
+                                  <span className="suggestion-label">建议：</span>
+                                  <input
+                                    type="text"
+                                    className="suggestion-input"
+                                    value={selectedSuggestion[suggestion.original] || suggestion.suggested}
+                                    onChange={(e) => setSelectedSuggestion(prev => ({
+                                      ...prev,
+                                      [suggestion.original]: e.target.value
+                                    }))}
+                                  />
+                                </div>
+                                <div className="suggestion-reasons">
+                                  {suggestion.reasons.map((reason, rIdx) => (
+                                    <span key={rIdx} className="reason-tag">• {reason}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {namingCheckResult.aiAnalysis && namingCheckResult.aiAnalysis.styleIssues.length > 0 && (
+                        <div className="ai-style-issues-section">
+                          <h3 className="section-subtitle">AI 风格问题分析</h3>
+                          <div className="issues-list">
+                            {namingCheckResult.aiAnalysis.styleIssues.map((issue, idx) => (
+                              <div key={idx} className="issue-item">
+                                <div className="issue-header">
+                                  <span className="issue-type warning">风格问题</span>
+                                </div>
+                                <div className="issue-details">
+                                  <p>原命名：<strong>{issue.originalName}</strong></p>
+                                  <p>当前风格：<strong>{issue.currentStyle}</strong></p>
+                                  <p>建议风格：<strong>{issue.suggestedStyle}</strong></p>
+                                  <p>建议命名：<strong className="suggested-name">{issue.suggestedName}</strong></p>
+                                  <p className="issue-reason">原因：{issue.reason}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {namingCheckResult.aiAnalysis && namingCheckResult.aiAnalysis.glossaryIssues.length > 0 && (
+                        <div className="ai-glossary-issues-section">
+                          <h3 className="section-subtitle">AI 术语问题分析</h3>
+                          <div className="issues-list">
+                            {namingCheckResult.aiAnalysis.glossaryIssues.map((issue, idx) => (
+                              <div key={idx} className="issue-item">
+                                <div className="issue-header">
+                                  <span className="issue-type error">术语问题</span>
+                                </div>
+                                <div className="issue-details">
+                                  <p>原命名：<strong>{issue.originalName}</strong></p>
+                                  <p>问题单词：<strong>{issue.word}</strong></p>
+                                  <p>期望术语：<strong>{issue.expectedWord}</strong>（中文：{issue.chineseTerm}）</p>
+                                  <p>建议命名：<strong className="suggested-name">{issue.suggestedName}</strong></p>
+                                  <p className="issue-reason">原因：{issue.reason}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </section>
+                  </>
+                )}
+              </>
             )}
           </>
         )}

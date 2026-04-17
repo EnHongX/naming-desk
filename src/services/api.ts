@@ -343,3 +343,117 @@ export async function deleteProjectNamingItem(itemId: number): Promise<{ success
     method: 'DELETE',
   })
 }
+
+export interface StyleAnalysis {
+  style: string
+  description: string
+  words: string[]
+  glossaryConflicts: GlossaryConflict[]
+  glossarySuggestions: GlossarySuggestion[]
+}
+
+export interface GlossaryConflict {
+  word: string
+  expectedEnglish: string
+  chineseTerm: string
+  description: string
+  message: string
+}
+
+export interface GlossarySuggestion {
+  original: string
+  suggested: string
+  chineseTerm: string
+  description: string
+  message: string
+}
+
+export interface ConsistencyIssue {
+  style: string
+  description: string
+  count: number
+  names: string[]
+  suggestedStyle: string
+  suggestedDescription: string
+}
+
+export interface ConsistencyCheck {
+  consistent: boolean
+  issues: ConsistencyIssue[]
+  dominantStyle: string | null
+  styleDescription: string
+}
+
+export interface GlossaryAnalysis {
+  conflicts: Array<{ name: string } & GlossaryConflict>
+  suggestions: Array<{ name: string } & GlossarySuggestion>
+}
+
+export interface BasicChecks {
+  styleAnalysis: Record<string, StyleAnalysis>
+  glossaryAnalysis: GlossaryAnalysis
+  consistencyCheck: ConsistencyCheck
+}
+
+export interface AIStyleIssue {
+  originalName: string
+  currentStyle: string
+  suggestedStyle: string
+  suggestedName: string
+  reason: string
+}
+
+export interface AIGlossaryIssue {
+  originalName: string
+  word: string
+  expectedWord: string
+  chineseTerm: string
+  suggestedName: string
+  reason: string
+}
+
+export interface AIPreferenceIssue {
+  originalName: string
+  issue: string
+  suggestion: string
+  suggestedName: string
+}
+
+export interface AISuggestedName {
+  original: string
+  suggested: string
+  reasons: string[]
+}
+
+export interface AIAnalysis {
+  overallAssessment: string
+  styleIssues: AIStyleIssue[]
+  glossaryIssues: AIGlossaryIssue[]
+  preferenceIssues: AIPreferenceIssue[]
+  suggestedNames: AISuggestedName[]
+}
+
+export interface SuggestedName {
+  original: string
+  suggested: string
+  reasons: string[]
+}
+
+export interface NamingCheckResult {
+  basicChecks: BasicChecks
+  aiAnalysis: AIAnalysis | null
+  suggestedNames: SuggestedName[]
+}
+
+export interface NamingCheckResponse {
+  success: boolean
+  results: NamingCheckResult
+}
+
+export async function checkNaming(names: string[], projectId?: number): Promise<NamingCheckResult> {
+  const response = await request<NamingCheckResponse>('/check-naming', {
+    method: 'POST',
+    body: JSON.stringify({ names, projectId }),
+  })
+  return response.results
+}
