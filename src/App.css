@@ -1772,3 +1772,53 @@ body {
     flex-direction: column;
   }
 }
+
+.export-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.export-btn {
+  padding: 8px 16px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition);
+  border: 1px solid transparent;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.export-json-btn {
+  color: var(--primary-color);
+  background: var(--primary-light);
+}
+
+.export-json-btn:hover {
+  background: var(--primary-color);
+  color: #ffffff;
+}
+
+.export-markdown-btn {
+  color: #059669;
+  background: #ecfdf5;
+}
+
+.export-markdown-btn:hover {
+  background: #10b981;
+  color: #ffffff;
+}
+
+@media (max-width: 768px) {
+  .export-buttons {
+    width: 100%;
+    margin-top: 8px;
+  }
+
+  .export-btn {
+    flex: 1;
+    justify-content: center;
+  }
+}

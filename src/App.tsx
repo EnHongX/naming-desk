@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react'
 import { NamingType, namingTypeLabels } from './utils/naming'
+import { exportAsMarkdown, exportAsJSON } from './utils/export'
 import { 
   saveHistory, 
   getHistory, 
@@ -550,6 +551,18 @@ function App() {
       console.error('Delete naming item error:', err)
     }
   }, [])
+
+  const handleExportMarkdown = useCallback(() => {
+    if (currentProject) {
+      exportAsMarkdown(currentProject)
+    }
+  }, [currentProject])
+
+  const handleExportJSON = useCallback(() => {
+    if (currentProject) {
+      exportAsJSON(currentProject)
+    }
+  }, [currentProject])
 
   const handleProjectSearch = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -1491,6 +1504,20 @@ function App() {
                   <section className="results-section">
                     <div className="results-header">
                       <h2 className="results-title">命名项（共 {currentProject.namingItems.length} 条）</h2>
+                      <div className="export-buttons">
+                        <button
+                          className="export-btn export-json-btn"
+                          onClick={handleExportJSON}
+                        >
+                          导出 JSON
+                        </button>
+                        <button
+                          className="export-btn export-markdown-btn"
+                          onClick={handleExportMarkdown}
+                        >
+                          导出 Markdown
+                        </button>
+                      </div>
                     </div>
                     
                     <div className="batch-results-list">
